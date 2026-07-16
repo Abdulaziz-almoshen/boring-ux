@@ -1,0 +1,745 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Boring UX — recorder</title>
+<style>
+  :root{
+    --bg:#0d0f14; --panel:#151a23; --panel2:#1b2130; --line:#2a3243;
+    --text:#e7ecf3; --muted:#8a94a6; --accent:#4f8cff; --good:#37d67a; --bad:#ff5470; --warn:#ffb020;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  #topbar{display:flex;gap:8px;align-items:center;padding:8px 12px;background:var(--panel);
+    border-bottom:1px solid var(--line);position:relative;z-index:40}
+  #topbar .brand{font-weight:700;font-size:14px;letter-spacing:.2px;white-space:nowrap;margin-right:6px}
+  #topbar .brand small{color:var(--muted);font-weight:500}
+  #url{flex:1;min-width:120px;background:var(--panel2);border:1px solid var(--line);color:var(--text);
+    border-radius:8px;padding:8px 10px;font-size:13px;outline:none}
+  #url:focus{border-color:var(--accent)}
+  button{background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:8px;
+    padding:8px 12px;font-size:13px;cursor:pointer;white-space:nowrap}
+  button:hover{border-color:var(--accent)}
+  button:disabled{opacity:.4;cursor:not-allowed}
+  button.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+  button.danger{background:var(--bad);border-color:var(--bad);color:#fff;font-weight:600}
+  button.good{background:var(--good);border-color:var(--good);color:#04210f;font-weight:700}
+  .pill{font-size:12px;padding:5px 10px;border-radius:999px;border:1px solid var(--line);color:var(--muted)}
+  .pill.live{background:rgba(255,84,112,.15);border-color:var(--bad);color:#ffb9c6}
+  .pill.rec-dot::before{content:"";display:inline-block;width:8px;height:8px;border-radius:50%;
+    background:var(--bad);margin-right:6px;animation:blink 1s infinite}
+  @keyframes blink{50%{opacity:.25}}
+  #main{position:absolute;inset:53px 0 0 0;display:flex}
+  #stageWrap{position:relative;flex:1;background:#000;overflow:hidden}
+  #stage{width:100%;height:100%;border:0;background:#fff}
+  #placeholder{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+    flex-direction:column;gap:10px;color:var(--muted);text-align:center;padding:24px}
+  #placeholder h2{color:var(--text);margin:0;font-size:18px}
+  #placeholder code{background:var(--panel2);padding:2px 6px;border-radius:5px;color:#cfe0ff}
+  /* gaze overlay */
+  #gazeLayer{position:absolute;inset:0;pointer-events:none;z-index:20}
+  #gazeDot{position:fixed;width:26px;height:26px;border-radius:50%;margin:-13px 0 0 -13px;
+    border:3px solid var(--accent);background:rgba(79,140,255,.28);box-shadow:0 0 18px rgba(79,140,255,.6);
+    transition:left .06s linear,top .06s linear;display:none;z-index:60}
+  #heat{position:absolute;inset:0;pointer-events:none;z-index:18;display:none}
+  #grid{position:absolute;inset:0;display:none;grid-template-columns:1fr 1fr 1fr;grid-template-rows:1fr 1fr 1fr;z-index:15}
+  #grid div{border:1px dashed rgba(255,255,255,.18);display:flex;align-items:flex-start;justify-content:flex-start;
+    color:rgba(255,255,255,.35);font-size:11px;padding:4px}
+  #grid div.hot{background:rgba(79,140,255,.16);border-color:var(--accent);color:#cfe0ff}
+  /* side panel */
+  #panel{width:320px;flex:none;background:var(--panel);border-left:1px solid var(--line);
+    overflow:hidden;transition:width .28s cubic-bezier(.4,0,.2,1)}
+  #main.collapsed #panel{width:0;border-left:0}
+  #panelInner{width:320px;height:100%;overflow-y:auto;overflow-x:hidden;display:flex;flex-direction:column}
+  #panelToggle{position:absolute;top:10px;right:320px;width:26px;height:44px;display:flex;align-items:center;
+    justify-content:center;background:var(--panel2);color:var(--muted);border:1px solid var(--line);
+    border-right:0;border-radius:9px 0 0 9px;cursor:pointer;z-index:45;font-size:15px;padding:0;
+    transition:right .28s cubic-bezier(.4,0,.2,1);box-shadow:-3px 0 10px rgba(0,0,0,.18)}
+  #panelToggle:hover{color:var(--text);border-color:var(--accent)}
+  #main.collapsed #panelToggle{right:0}
+  .sec{padding:12px 14px;border-bottom:1px solid var(--line)}
+  .sec h3{margin:0 0 8px;font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted)}
+  .row{display:flex;gap:8px;flex-wrap:wrap}
+  .row.stack{flex-direction:column}
+  .stat{display:flex;justify-content:space-between;font-size:13px;padding:3px 0}
+  .stat b{font-variant-numeric:tabular-nums}
+  .big{font-size:26px;font-weight:700;font-variant-numeric:tabular-nums}
+  .region-badge{font-size:22px;font-weight:800;letter-spacing:1px;color:var(--accent)}
+  .bar{height:8px;background:var(--panel2);border-radius:6px;overflow:hidden;margin:4px 0}
+  .bar > i{display:block;height:100%;background:var(--accent)}
+  .barlabel{display:flex;justify-content:space-between;font-size:11px;color:var(--muted)}
+  #log{font-size:12px;line-height:1.5;max-height:190px;overflow:auto;background:var(--panel2);
+    border-radius:8px;padding:8px;color:var(--muted)}
+  #log .t{color:#6a768c}
+  #log .pg{color:#9ecbff}
+  #log .ck{color:#ffd479}
+  #log .fd{color:#8ee6b3}
+  #log .mk{color:#ff9db0}
+  .hint{font-size:11px;color:var(--muted);line-height:1.5}
+  a.link{color:var(--accent);text-decoration:none}
+  /* calibration */
+  #cal{position:fixed;inset:0;background:rgba(6,8,12,.94);z-index:100;display:none}
+  #cal .msg{position:absolute;top:24px;left:0;right:0;text-align:center;color:var(--text);font-size:15px}
+  #cal .msg small{color:var(--muted)}
+  .caldot{position:absolute;width:34px;height:34px;border-radius:50%;background:var(--bad);
+    border:3px solid #fff;cursor:pointer;transform:translate(-50%,-50%);
+    display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#fff}
+  .caldot.done{background:var(--good);color:#04210f}
+  /* webgazer preview reposition */
+  #webgazerVideoContainer{top:auto!important;left:auto!important;right:10px!important;bottom:10px!important;
+    z-index:30!important;opacity:.85;border-radius:10px;overflow:hidden;box-shadow:0 6px 24px rgba(0,0,0,.5)}
+  #toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:var(--panel2);
+    border:1px solid var(--line);color:var(--text);padding:10px 16px;border-radius:10px;font-size:13px;
+    z-index:120;display:none;box-shadow:0 8px 30px rgba(0,0,0,.5)}
+</style>
+</head>
+<body>
+  <div id="topbar">
+    <div class="brand">😴 Boring UX <small>recorder</small></div>
+    <input id="url" placeholder="https://your-site.com  (must include tracker.js)" />
+    <button id="loadBtn">Load</button>
+    <span style="flex:1"></span>
+    <a href="analyze.html" style="text-decoration:none"><button title="Upload & replay a saved session, and generate a report">📤 Open / Replay session</button></a>
+    <span id="camPill" class="pill">camera: off</span>
+    <span id="recPill" class="pill">idle</span>
+  </div>
+
+  <div id="main">
+    <div id="stageWrap">
+      <iframe id="stage" allow="camera; microphone; fullscreen"></iframe>
+      <div id="placeholder">
+        <h2>1 · Enter your site URL and press Load</h2>
+        <div class="hint">Your page must include the tracker snippet:<br><code>&lt;script src="tracker.js"&gt;&lt;/script&gt;</code><br>(see README.md). Then: <b>Enable camera → Calibrate → Start.</b></div>
+      </div>
+      <div id="grid">
+        <div data-r="TL"></div><div data-r="TC"></div><div data-r="TR"></div>
+        <div data-r="ML"></div><div data-r="MC"></div><div data-r="MR"></div>
+        <div data-r="BL"></div><div data-r="BC"></div><div data-r="BR"></div>
+      </div>
+      <canvas id="heat"></canvas>
+    </div>
+    <div id="gazeDot"></div>
+
+    <button id="panelToggle" title="Collapse panel">»</button>
+    <div id="panel">
+      <div id="panelInner">
+      <div class="sec">
+        <h3>Camera & Gaze</h3>
+        <div class="row stack">
+          <button id="camBtn" class="primary">Enable camera</button>
+          <button id="calBtn" disabled>Calibrate gaze</button>
+          <label class="hint"><input type="checkbox" id="gridToggle"> layer 1 · region grid (L/C/R)</label>
+          <label class="hint"><input type="checkbox" id="heatToggle"> layer 2 · precise-pixel heat trail</label>
+        </div>
+      </div>
+
+      <div class="sec">
+        <h3>Session</h3>
+        <button id="folderBtn" style="width:100%;margin-bottom:6px">📁 Choose save folder…</button>
+        <div id="folderStatus" class="hint" style="margin-bottom:8px">No folder chosen — recording will buffer in memory (risky for long sessions).</div>
+        <div class="row">
+          <button id="startBtn" class="good" disabled>● Start</button>
+          <button id="stopBtn" class="danger" disabled>■ Stop</button>
+        </div>
+        <div class="row" style="margin-top:8px">
+          <button id="markBtn" disabled>＋ Marker</button>
+          <button id="saveBtn" disabled>⬇ Save session</button>
+        </div>
+        <div style="margin-top:10px" class="big"><span id="elapsed">00:00</span></div>
+      </div>
+
+      <div class="sec">
+        <h3>Live gaze</h3>
+        <div class="stat"><span>Layer 1 · Region</span><span class="region-badge" id="regionNow">—</span></div>
+        <div class="stat"><span>Layer 2 · px (screen)</span><b id="pxScreen">—</b></div>
+        <div class="stat"><span>Layer 2 · px (on page)</span><b id="pxPage">—</b></div>
+        <div class="barlabel"><span>Left</span><span id="pctL">0%</span></div>
+        <div class="bar"><i id="barL" style="width:0"></i></div>
+        <div class="barlabel"><span>Center</span><span id="pctC">0%</span></div>
+        <div class="bar"><i id="barC" style="width:0"></i></div>
+        <div class="barlabel"><span>Right</span><span id="pctR">0%</span></div>
+        <div class="bar"><i id="barR" style="width:0"></i></div>
+      </div>
+
+      <div class="sec">
+        <h3>Current page</h3>
+        <div class="stat"><span id="pageTitle" style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">—</span><b id="pageTime">0.0s</b></div>
+        <div class="stat"><span>Pages visited</span><b id="pageCount">0</b></div>
+        <div class="stat"><span>Clicks</span><b id="clickCount">0</b></div>
+        <div class="stat"><span>Fields filled</span><b id="fieldCount">0</b></div>
+      </div>
+
+      <div class="sec">
+        <h3>Frustration signals</h3>
+        <div class="stat"><span>Dead clicks <span class="hint">(not clickable)</span></span><b id="deadCount">0</b></div>
+        <div class="stat"><span>Rage clicks <span class="hint">(3+ rapid)</span></span><b id="rageCount">0</b></div>
+        <div class="stat"><span>Scroll thrash <span class="hint">(up/down)</span></span><b id="thrashCount">0</b></div>
+        <div class="stat"><span>Max scroll depth</span><b id="maxScroll">0%</b></div>
+      </div>
+
+      <div class="sec" style="flex:1">
+        <h3>Event log</h3>
+        <div id="log"></div>
+      </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="cal">
+    <div class="msg">Click each red dot <b>5 times</b> while looking at it. <br><small>Dots turn green when done. This trains the gaze model against your clicks.</small></div>
+  </div>
+
+  <div id="toast"></div>
+
+<script>
+/* ============================ WebGazer loader ============================ */
+function loadWebgazer(){
+  return new Promise((resolve,reject)=>{
+    const urls=[
+      "https://cdn.jsdelivr.net/npm/webgazer@3.3.0/dist/webgazer.min.js",
+      "https://webgazer.cs.brown.edu/webgazer.js"
+    ];
+    let i=0;
+    const tryNext=()=>{
+      if(i>=urls.length) return reject(new Error("Could not load WebGazer (are you online?)"));
+      const s=document.createElement("script");
+      s.src=urls[i++]; s.async=true;
+      s.onload=()=> window.webgazer ? resolve(window.webgazer) : tryNext();
+      s.onerror=tryNext;
+      document.head.appendChild(s);
+    };
+    tryNext();
+  });
+}
+
+/* ============================ State ============================ */
+const S={
+  camReady:false, calibrated:false, recording:false,
+  micStream:null, camVideoTrack:null,
+  recorders:[], chunks:{screen:[],face:[],audio:[]},
+  blobs:{}, startWall:0, startPerf:0,
+  gaze:[],            // {t,gx,gy,col,row,region}
+  events:[],          // raw events from page + system
+  pages:[],           // {url,title,startT,endT}
+  clicks:0, fields:0, deadClicks:0, rageClicks:0, thrash:0, maxScroll:0,
+  regionTime:{L:0,C:0,R:0}, lastGazeT:0, lastRegion:null,
+  heatOn:false, timer:null,
+  rootDir:null, sessionDir:null, writers:null, diskMode:false, stampName:""
+};
+const $=id=>document.getElementById(id);
+const nowRel=()=> S.startPerf ? (performance.now()-S.startPerf) : 0;
+
+function toast(msg,ms=2600){const t=$("toast");t.textContent=msg;t.style.display="block";
+  clearTimeout(toast._t);toast._t=setTimeout(()=>t.style.display="none",ms);}
+
+/* ============================ Panel collapse/expand ============================ */
+$("panelToggle").onclick=()=>{
+  const collapsed=$("main").classList.toggle("collapsed");
+  $("panelToggle").textContent=collapsed?"«":"»";
+  $("panelToggle").title=collapsed?"Show panel":"Collapse panel";
+  setTimeout(()=>{ if(S.heatOn) sizeHeat(); },320); // re-fit heat layer to new stage width
+};
+
+/* ============================ Load target site ============================ */
+$("loadBtn").onclick=loadSite;
+$("url").addEventListener("keydown",e=>{if(e.key==="Enter")loadSite();});
+function loadSite(){
+  let u=$("url").value.trim();
+  if(!u){toast("Enter your site URL first");return;}
+  if(!/^https?:\/\//i.test(u)) u="https://"+u;
+  $("stage").src=u; $("placeholder").style.display="none";
+  logLine("system","loading "+u);
+}
+
+/* ============================ Camera + WebGazer ============================ */
+$("camBtn").onclick=async()=>{
+  $("camBtn").disabled=true; $("camBtn").textContent="Starting camera…";
+  try{
+    const wg=await loadWebgazer();
+    wg.params.showVideoPreview=true;
+    wg.showPredictionPoints(false);
+    wg.applyKalmanFilter(true);
+    await wg.setRegression("ridge").setGazeListener(onGaze).begin();
+    // grab the camera video track that WebGazer opened, for face recording
+    await waitForCamTrack();
+    S.camReady=true;
+    $("camPill").textContent="camera: on"; $("camPill").style.color="var(--good)";
+    $("calBtn").disabled=false; $("startBtn").disabled=false;
+    $("camBtn").textContent="Camera on ✓";
+    toast("Camera on. Calibrate for better accuracy, then Start.");
+  }catch(err){
+    console.error(err);
+    $("camBtn").disabled=false; $("camBtn").textContent="Enable camera";
+    toast("Camera/WebGazer failed: "+err.message,5000);
+  }
+};
+function waitForCamTrack(){
+  return new Promise((res)=>{
+    let n=0;
+    const iv=setInterval(()=>{
+      const v=document.getElementById("webgazerVideoFeed");
+      const ms=v&&v.srcObject;
+      if(ms&&ms.getVideoTracks().length){
+        S.camVideoTrack=ms.getVideoTracks()[0];
+        clearInterval(iv);res();
+      }else if(++n>40){clearInterval(iv);res();} // ~8s giveup, face recording just skipped
+    },200);
+  });
+}
+// Return a guaranteed-LIVE camera video track for face recording, or null.
+function getLiveFaceTrack(){
+  const feed=document.getElementById("webgazerVideoFeed");
+  // 1) preferred: capture the live preview element (always reflects the current camera frames)
+  if(feed && typeof feed.captureStream==="function"){
+    try{
+      const vt=feed.captureStream().getVideoTracks()[0];
+      if(vt && vt.readyState==="live") return vt;
+    }catch(e){}
+  }
+  // 2) fallback: the stored track, but only if it's still live
+  if(S.camVideoTrack && S.camVideoTrack.readyState==="live"){
+    try{ const c=S.camVideoTrack.clone(); if(c.readyState==="live") return c; }catch(e){}
+  }
+  // 3) last resort: re-read from the feed's srcObject if live
+  const ms=feed && feed.srcObject;
+  if(ms){ const vt=ms.getVideoTracks().find(t=>t.readyState==="live"); if(vt){ try{return vt.clone();}catch(e){} } }
+  return null;
+}
+
+/* ---- gaze listener ---- */
+function onGaze(data){
+  if(!data) return;
+  const gx=data.x, gy=data.y;
+  $("gazeDot").style.left=gx+"px"; $("gazeDot").style.top=gy+"px";
+  const rect=$("stageWrap").getBoundingClientRect();
+  let col=null,row=null,region="outside",sx=null,sy=null;
+  const inside=gx>=rect.left&&gx<=rect.right&&gy>=rect.top&&gy<=rect.bottom;
+  if(inside){
+    const fx=(gx-rect.left)/rect.width, fy=(gy-rect.top)/rect.height;
+    // LAYER 1 — coarse region
+    col=fx<1/3?"L":fx>2/3?"R":"C";
+    row=fy<1/3?"T":fy>2/3?"B":"M";
+    region=row+col; // e.g. TL, MC, BR
+    // LAYER 2 — precise pixel, relative to the tested page
+    sx=Math.round(gx-rect.left); sy=Math.round(gy-rect.top);
+  }
+  updateRegionUI(col,region);
+  // live precise-pixel readouts + heat trail (layer 2)
+  $("pxScreen").textContent=Math.round(gx)+", "+Math.round(gy);
+  $("pxPage").textContent=inside?(sx+", "+sy):"—";
+  if(S.heatOn&&inside) drawHeat(sx,sy);
+  if(S.recording){
+    const t=nowRel();
+    S.gaze.push({t:Math.round(t),gx:Math.round(gx),gy:Math.round(gy),
+                 sx:(sx==null?"":sx),sy:(sy==null?"":sy),col:col||"",region});
+    if(col){ // accumulate horizontal-region dwell time
+      if(S.lastRegion&&S.lastGazeT) S.regionTime[S.lastRegion]+=(t-S.lastGazeT);
+      S.lastRegion=col; S.lastGazeT=t;
+    }
+  }
+}
+function updateRegionUI(col,region){
+  $("regionNow").textContent = col? ({L:"◄ LEFT",C:"● CENTER",R:"RIGHT ►"}[col]) : "—";
+  // grid highlight
+  if($("grid").style.display!=="none"){
+    document.querySelectorAll("#grid div").forEach(d=>d.classList.toggle("hot",d.dataset.r===region));
+  }
+  const tot=S.regionTime.L+S.regionTime.C+S.regionTime.R||1;
+  for(const k of ["L","C","R"]){
+    const p=Math.round(S.regionTime[k]/tot*100);
+    $("bar"+k).style.width=p+"%"; $("pct"+k).textContent=p+"%";
+  }
+}
+$("gridToggle").onchange=e=>{
+  $("grid").style.display=e.target.checked?"grid":"none";
+  document.querySelectorAll("#grid div").forEach(d=>d.textContent=d.dataset.r);
+};
+
+/* ---- Layer 2: precise-pixel heat trail ---- */
+let heatCtx=null;
+$("heatToggle").onchange=e=>{
+  S.heatOn=e.target.checked;
+  $("heat").style.display=S.heatOn?"block":"none";
+  if(S.heatOn) sizeHeat(); else clearHeat();
+};
+function sizeHeat(){
+  const c=$("heat"), w=$("stageWrap").clientWidth, h=$("stageWrap").clientHeight;
+  if(c.width!==w||c.height!==h){c.width=w;c.height=h;} // note: resizing clears the canvas
+  heatCtx=c.getContext("2d");
+}
+function clearHeat(){ if(heatCtx) heatCtx.clearRect(0,0,$("heat").width,$("heat").height); }
+function drawHeat(x,y){
+  const c=$("heat");
+  if(c.width!==$("stageWrap").clientWidth||c.height!==$("stageWrap").clientHeight) sizeHeat();
+  const ctx=heatCtx||(heatCtx=c.getContext("2d"));
+  // fade the whole layer slightly so older points decay -> comet/heat trail
+  ctx.globalCompositeOperation="destination-out";
+  ctx.fillStyle="rgba(0,0,0,0.05)";
+  ctx.fillRect(0,0,c.width,c.height);
+  // stamp the current precise pixel
+  ctx.globalCompositeOperation="source-over";
+  const r=26, g=ctx.createRadialGradient(x,y,0,x,y,r);
+  g.addColorStop(0,"rgba(79,140,255,0.55)");
+  g.addColorStop(0.5,"rgba(140,90,255,0.28)");
+  g.addColorStop(1,"rgba(140,90,255,0)");
+  ctx.fillStyle=g; ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2); ctx.fill();
+}
+window.addEventListener("resize",()=>{ if(S.heatOn) sizeHeat(); });
+
+/* ============================ Calibration ============================ */
+$("calBtn").onclick=startCalibration;
+function startCalibration(){
+  const cal=$("cal"); cal.style.display="block";
+  cal.querySelectorAll(".caldot").forEach(d=>d.remove());
+  const pts=[[10,15],[50,15],[90,15],[10,50],[50,50],[90,50],[10,85],[50,85],[90,85]];
+  let remaining=pts.length;
+  pts.forEach(([x,y])=>{
+    const d=document.createElement("div");
+    d.className="caldot"; d.style.left=x+"vw"; d.style.top=y+"vh"; let c=0; d.textContent="0/5";
+    d.onclick=()=>{ c++; d.textContent=c+"/5";
+      if(c>=5){ d.classList.add("done"); d.style.pointerEvents="none";
+        if(--remaining===0){ setTimeout(()=>{cal.style.display="none";
+          S.calibrated=true; toast("Calibration done ✓"); logLine("system","calibration complete"); },400); } }
+    };
+    cal.appendChild(d);
+  });
+}
+
+/* ============================ Events from the page (tracker.js) ============================ */
+window.addEventListener("message",ev=>{
+  const d=ev.data;
+  if(!d||d.__uxr!==true) return;
+  const t=nowRel();
+  const e={...d,t:Math.round(t)}; delete e.__uxr;
+  if(S.recording) S.events.push(e);
+
+  if(d.type==="page"){
+    if(S.recording){
+      const prev=S.pages[S.pages.length-1];
+      if(prev&&prev.endT==null) prev.endT=t;
+      S.pages.push({url:d.url,title:d.title||d.url,startT:t,endT:null});
+      $("pageCount").textContent=S.pages.length;
+    }
+    $("pageTitle").textContent=d.title||d.url;
+    logLine("pg","page ▸ "+(d.title||d.url));
+  }else if(d.type==="click"){
+    const dead=(d.clickable===false);
+    if(S.recording){ S.clicks++; $("clickCount").textContent=S.clicks;
+      e.gazeRegion=S.lastRegion||"?";
+      if(dead){ S.deadClicks++; $("deadCount").textContent=S.deadClicks; } }
+    logLine(dead?"mk":"ck","click ▸ "+(d.txt||d.tag||"(empty)")+" ["+(S.lastRegion||"?")+"]"+(dead?" · DEAD — not clickable":""));
+  }else if(d.type==="rage_click"){
+    if(S.recording){ S.rageClicks++; $("rageCount").textContent=S.rageClicks; }
+    logLine("mk","😖 rage click ×"+d.count);
+  }else if(d.type==="scroll_thrash"){
+    if(S.recording){ S.thrash++; $("thrashCount").textContent=S.thrash; }
+    logLine("mk","↕ scroll thrash ×"+d.count+" @ "+d.pct+"%");
+  }else if(d.type==="scroll"){
+    if(S.recording && d.pct>S.maxScroll){ S.maxScroll=d.pct; $("maxScroll").textContent=d.pct+"%"; }
+    // scroll samples go into the event log data but are not printed (too noisy)
+  }else if(d.type==="field_blur"){
+    if(S.recording){ S.fields++; $("fieldCount").textContent=S.fields; }
+    logLine("fd","field ▸ "+d.field+" filled in "+((d.fillMs||0)/1000).toFixed(1)+"s");
+  }else if(d.type==="field_focus"){
+    logLine("fd","field ▸ "+d.field+" focus");
+  }else if(d.type==="submit"){
+    logLine("pg","submit ▸ "+(d.form||"form"));
+  }
+});
+
+/* ============================ Recording ============================ */
+function pickMime(){
+  const c=["video/webm;codecs=vp9,opus","video/webm;codecs=vp8,opus","video/webm"];
+  return c.find(m=>window.MediaRecorder&&MediaRecorder.isTypeSupported(m))||"";
+}
+$("startBtn").onclick=startSession;
+$("stopBtn").onclick=stopSession;
+$("folderBtn").onclick=chooseFolder;
+
+// Serialized chunk-writer: streams MediaRecorder chunks straight to a file on disk,
+// so the header (first chunk) is written first and never lost, and memory stays flat.
+function makeWriter(fileHandle){
+  let writable=null, chain=Promise.resolve(), bytes=0, err=null;
+  return {
+    async open(){ writable=await fileHandle.createWritable(); },
+    write(blob){ chain=chain.then(()=>writable.write(blob)).then(()=>{bytes+=blob.size;})
+                            .catch(e=>{err=e;console.error("chunk write failed",e);}); },
+    async close(){ try{ await chain; if(writable) await writable.close(); }catch(e){err=e;} return {bytes,err}; }
+  };
+}
+async function writeText(dir,name,text){
+  const fh=await dir.getFileHandle(name,{create:true});
+  const w=await fh.createWritable(); await w.write(new Blob([text])); await w.close();
+}
+// Prompt dropped into every session folder — paste into Claude/ChatGPT (or run with Claude Code here) to generate the full UX report.
+const ANALYZE_PROMPT=`# Boring UX — Session → UX Report (AI prompt)
+
+Paste this into Claude or ChatGPT (or run Claude Code in this folder) and attach the files here.
+
+FIRST transcribe the audio (local, private):
+  brew install whisper-cpp ffmpeg
+  ffmpeg -i audio.webm -ar 16000 -ac 1 audio.wav
+  whisper-cli -m ggml-large-v3-turbo.bin -f audio.wav -l auto -osrt -of transcript
+Then attach transcript.srt.
+
+---
+You are a senior UX researcher + product manager. Analyze this moderated, think-aloud, webcam eye-tracking session and produce ONE self-contained HTML report (print-to-PDF ready).
+
+INPUTS: gaze.csv (t_ms, screen/page x/y, h_region L/C/R, cell TL..BR — may be UNCALIBRATED, treat pixels as directional), events.csv (pages/clicks/field-times/dead+rage clicks — may be empty if no tracker snippet), session.json (duration/viewport/signals), transcript.srt (translate quotes to English + keep original).
+
+METHOD: fuse all three on one clock (t=0 = record start); for every spoken segment compute gaze region + on-screen % during it; tie each finding to (what they said) + (where eyes were) + (how long); classify each segment intent = action / seeking-data / confused; pool gaze per intent into a 3x3 grid; compute L/C/R dwell, 3x3 heatmap, attention-over-time, engagement (on-screen %), searching intensity (switches/min), fixations (>1s = deep), silent-gap latency (pauses >=4s + what eyes did), per-page + per-field timing, frustration signals. Be honest: flag uncalibrated gaze as directional; flag empty events.csv; n=1 unless more sessions.
+
+REPORT SECTIONS: (1) title+product; (2) overall grade /10 + sub-scores + verdict; (3) exec summary (P0 fix-first / P1 fix-next / keep-delighters); (4) method & confidence; (5) journeys per session (stage·time·emotion emoji·gaze·opportunity); (6) attention analytics graphed as inline SVG (gaze ribbon orange=L blue=C green=R grey=away + engagement + searching lines + feature-phase bar); (7) feature scorecard table (feature·time·L/C/R bar·on-screen·search/min·signal·friction 0-100·rec); (8) product insights + attention x friction matrix + roadmap; (9) findings P0->P1->Keep->P2 (quote + English + eyes-at-that-moment + timing + rec); (10) latency table; (11) RICE backlog (Reach x Impact x Confidence / Effort, ticket-ready); (12) conclusion: 3 intent heatmaps (action/data/confused) + "where to place actions, data, filters" table; (13) appendix: every fused segment verbatim (gaze region/cell, on-screen %, latency gap) — nothing summarised.
+
+DESIGN: inline <style>, no external assets. System sans, max-width ~960px. text #1a2233, muted #6b7488, borders #e6eaf2; P0 #d33, P1 #e8871e, accent #4f8cff, delight #0a9d54. Original quotes in a green-left-border box (direction:rtl for Arabic) + English italic beneath. Eyes callout in light-blue box. Table headers #f0f3f9. @media print for clean PDF. Ribbon/heatmaps as inline SVG.
+`;
+async function chooseFolder(){
+  if(!window.showDirectoryPicker){ toast("This browser can't pick a folder — sessions will download instead.",5000); return; }
+  try{
+    S.rootDir=await window.showDirectoryPicker({mode:"readwrite"});
+    $("folderStatus").textContent="✓ Saving into the chosen folder — media streams to disk live.";
+    $("folderStatus").style.color="var(--good)";
+    toast("Save folder set. Recordings stream straight to disk.");
+  }catch(e){ if(e.name!=="AbortError") toast("Folder pick failed: "+e.message,4000); }
+}
+
+async function startSession(){
+  if(!S.camReady){toast("Enable the camera first");return;}
+  S.diskMode=!!S.rootDir;
+  try{
+    // mic audio
+    S.micStream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true}});
+    // screen (user picks a screen/tab/window)
+    let screenStream=null;
+    try{
+      screenStream=await navigator.mediaDevices.getDisplayMedia({video:{frameRate:15},audio:false});
+    }catch(e){ toast("Screen capture skipped: "+e.message,4000); }
+
+    const mime=pickMime(), audioMime=(mime.replace(/video\/webm.*/,"audio/webm")||"");
+    S.recorders=[]; S.chunks={screen:[],face:[],audio:[]}; S.blobs={}; S.writers={};
+
+    // start the clock the instant before recorders start, so gaze/event t=0 == video 0:00
+    S.recording=true; S.startWall=Date.now(); S.startPerf=performance.now();
+    S.gaze=[]; S.events=[]; S.pages=[]; S.clicks=0; S.fields=0;
+    S.deadClicks=0; S.rageClicks=0; S.thrash=0; S.maxScroll=0;
+    S.regionTime={L:0,C:0,R:0}; S.lastGazeT=0; S.lastRegion=null;
+    const _sr=$("stageWrap").getBoundingClientRect();       // stage size -> lets the viewer place the gaze dot
+    S.stageW=Math.round(_sr.width); S.stageH=Math.round(_sr.height);
+
+    // create the session folder up-front (disk streaming mode)
+    S.sessionDir=null;
+    if(S.diskMode){
+      const stamp=new Date(S.startWall).toISOString().replace(/[:.]/g,"-").slice(0,19);
+      S.stampName="session-"+stamp;
+      S.sessionDir=await S.rootDir.getDirectoryHandle(S.stampName,{create:true});
+    }
+
+    // one recorder per stream; streams to disk if we have a folder, else buffers in memory
+    const mkRec=async(stream,key,useMime,vbps)=>{
+      const opts={mimeType:useMime,audioBitsPerSecond:128000}; if(vbps)opts.videoBitsPerSecond=vbps;
+      let r; try{ r=new MediaRecorder(stream,opts); }catch(e){ r=new MediaRecorder(stream,{mimeType:useMime}); }
+      if(S.diskMode){
+        const fh=await S.sessionDir.getFileHandle(key+".webm",{create:true});
+        const w=makeWriter(fh); await w.open(); S.writers[key]=w;
+        r.ondataavailable=e=>{ if(e.data.size) w.write(e.data); };
+      }else{
+        r.ondataavailable=e=>{ if(e.data.size) S.chunks[key].push(e.data); };
+      }
+      S.recorders.push(r); r.start(2000); r._key=key; return r;   // 2s chunks -> header written first, then streamed
+    };
+
+    // screen + voice (bitrate-capped so files aren't gigantic)
+    if(screenStream){
+      const sv=screenStream.getVideoTracks()[0];
+      const mixed=new MediaStream([sv, S.micStream.getAudioTracks()[0].clone()]);
+      await mkRec(mixed,"screen",mime,2500000);
+      sv.addEventListener("ended",()=>{ if(S.recording) stopSession(); }); // user hit "Stop sharing"
+    }
+    // face + voice — grab a LIVE video track at record time (a stored track can go "ended",
+    // which MediaRecorder silently drops -> face.webm ends up audio-only)
+    const faceTrack=getLiveFaceTrack();
+    if(faceTrack){
+      await mkRec(new MediaStream([faceTrack, S.micStream.getAudioTracks()[0].clone()]),"face",mime,1200000);
+    }else{
+      logLine("system","⚠ face camera not live — face.webm skipped (audio still saved)");
+      toast("Face video unavailable — camera track wasn't live. Audio + screen still recording.",5000);
+    }
+    // audio only
+    await mkRec(S.micStream,"audio",audioMime,0);
+
+    // switch UI into recording state
+    $("clickCount").textContent="0"; $("fieldCount").textContent="0"; $("pageCount").textContent="0";
+    $("deadCount").textContent="0"; $("rageCount").textContent="0"; $("thrashCount").textContent="0"; $("maxScroll").textContent="0%";
+    $("gazeDot").style.display="block";
+
+    logLine("system","● recording"+(S.diskMode?" → streaming to "+S.stampName:" (IN-MEMORY — keep it short)")+(S.calibrated?"":" · not calibrated"));
+    if(!S.diskMode) toast("⚠ No save folder chosen — buffering in memory. Long sessions may fail to save. Stop and choose a folder for real sessions.",6000);
+    $("recPill").textContent="RECORDING"; $("recPill").className="pill live rec-dot";
+    $("startBtn").disabled=true; $("stopBtn").disabled=false;
+    $("markBtn").disabled=false; $("saveBtn").disabled=true; $("camBtn").disabled=true; $("folderBtn").disabled=true;
+    S.timer=setInterval(tick,200);
+  }catch(err){
+    console.error(err); toast("Could not start: "+err.message,5000);
+    S.recording=false;
+  }
+}
+
+function tick(){
+  const t=nowRel();
+  $("elapsed").textContent=fmt(t);
+  const p=S.pages[S.pages.length-1];
+  if(p) $("pageTime").textContent=((t-p.startT)/1000).toFixed(1)+"s";
+}
+
+async function stopSession(){
+  if(!S.recording) return;
+  S.recording=false; clearInterval(S.timer);
+  const endT=nowRel();
+  const last=S.pages[S.pages.length-1]; if(last&&last.endT==null) last.endT=endT;
+  if(S.lastRegion&&S.lastGazeT) S.regionTime[S.lastRegion]+=(endT-S.lastGazeT);
+
+  $("recPill").textContent="finalizing…"; $("recPill").className="pill";
+  // stop + flush recorders
+  await Promise.all(S.recorders.map(r=>new Promise(res=>{
+    if(r.state==="inactive") return res();
+    r.onstop=()=>res(); try{r.stop();}catch(e){res();}
+  })));
+  // stop tracks
+  S.recorders.forEach(r=>r.stream.getTracks().forEach(t=>t.stop()));
+
+  $("gazeDot").style.display="none";
+  $("startBtn").disabled=false; $("stopBtn").disabled=true;
+  $("markBtn").disabled=true; $("camBtn").disabled=false; $("folderBtn").disabled=false;
+
+  if(S.diskMode && S.sessionDir){
+    // close writers (flush remaining bytes to disk) then write the metadata files alongside
+    const res={};
+    for(const k in S.writers){ res[k]=await S.writers[k].close(); }
+    try{
+      await writeText(S.sessionDir,"session.json",JSON.stringify(buildSummary(),null,2));
+      await writeText(S.sessionDir,"events.csv",toEventsCSV());
+      await writeText(S.sessionDir,"gaze.csv",toGazeCSV());
+      await writeText(S.sessionDir,"ANALYZE-PROMPT.md",ANALYZE_PROMPT);   // drop the AI-report prompt beside the data
+    }catch(e){ console.error(e); }
+    const mb=k=>res[k]?(res[k].bytes/1048576).toFixed(1)+"MB":"—";
+    const bad=Object.keys(res).filter(k=>res[k]&&res[k].error);
+    logLine("system","■ saved to "+S.stampName+" — screen "+mb("screen")+", face "+mb("face")+", audio "+mb("audio")+(bad.length?" ⚠ write errors: "+bad.join(","):""));
+    toast(bad.length? ("Saved with write errors on: "+bad.join(", ")) : ("Saved to "+S.stampName+" ✓ (streamed to disk)"),5000);
+    $("recPill").textContent=bad.length?"saved ⚠":"saved ✓";
+    $("saveBtn").disabled=true;   // already on disk
+  }else{
+    // fallback (no folder): assemble blobs in memory and let the user download via Save
+    const mime=pickMime();
+    if(S.chunks.screen.length) S.blobs.screen=new Blob(S.chunks.screen,{type:mime});
+    if(S.chunks.face.length)   S.blobs.face  =new Blob(S.chunks.face,{type:mime});
+    if(S.chunks.audio.length)  S.blobs.audio =new Blob(S.chunks.audio,{type:"audio/webm"});
+    $("recPill").textContent="stopped";
+    $("saveBtn").disabled=false;
+    logLine("system","■ recording stopped — "+fmt(endT)+" — ready to Save");
+    toast("Recording stopped. Press “Save session”.");
+  }
+}
+
+$("markBtn").onclick=()=>{
+  if(!S.recording)return;
+  const note=prompt("Marker note (e.g. 'looked confused', 'missed the button'):","");
+  const t=nowRel();
+  S.events.push({type:"marker",note:note||"",t:Math.round(t)});
+  logLine("mk","marker ▸ "+(note||"(no note)"));
+};
+
+/* ============================ Save locally ============================ */
+$("saveBtn").onclick=saveSession;
+async function saveSession(){
+  const summary=buildSummary();
+  const files=[
+    ["session.json", new Blob([JSON.stringify(summary,null,2)],{type:"application/json"})],
+    ["events.csv",   new Blob([toEventsCSV()],{type:"text/csv"})],
+    ["gaze.csv",     new Blob([toGazeCSV()],{type:"text/csv"})],
+  ];
+  if(S.blobs.screen) files.push(["screen.webm",S.blobs.screen]);
+  if(S.blobs.face)   files.push(["face.webm",S.blobs.face]);
+  if(S.blobs.audio)  files.push(["audio.webm",S.blobs.audio]);
+
+  // Preferred: File System Access API -> write all into a folder the user picks
+  if(window.showDirectoryPicker){
+    try{
+      const dir=await window.showDirectoryPicker({mode:"readwrite"});
+      const stamp=new Date(S.startWall).toISOString().replace(/[:.]/g,"-").slice(0,19);
+      const sub=await dir.getDirectoryHandle("session-"+stamp,{create:true});
+      for(const [name,blob] of files){
+        const fh=await sub.getFileHandle(name,{create:true});
+        const w=await fh.createWritable(); await w.write(blob); await w.close();
+      }
+      toast("Saved "+files.length+" files to session-"+stamp+" ✓",4000);
+      logLine("system","saved "+files.length+" files locally ✓");
+      return;
+    }catch(e){ if(e.name==="AbortError"){toast("Save cancelled");return;} console.warn(e); }
+  }
+  // Fallback: individual downloads
+  for(const [name,blob] of files){ downloadBlob(name,blob); await sleep(250); }
+  toast("Downloaded "+files.length+" files (check your Downloads).",4000);
+}
+
+function buildSummary(){
+  const total=S.pages.reduce((a,p)=>a+((p.endT??nowRel())-p.startT),0);
+  const pages=S.pages.map((p,i)=>{
+    const dur=(p.endT??nowRel())-p.startT;
+    const clicks=S.events.filter(e=>e.type==="click"&&e.t>=p.startT&&(p.endT==null||e.t<p.endT));
+    const fields=S.events.filter(e=>e.type==="field_blur"&&e.t>=p.startT&&(p.endT==null||e.t<p.endT));
+    return {
+      index:i, url:p.url, title:p.title,
+      timeOnPageSec:+(dur/1000).toFixed(2),
+      clicks:clicks.length,
+      firstClickAfterSec: clicks.length? +((clicks[0].t-p.startT)/1000).toFixed(2):null,
+      fields: fields.map(f=>({field:f.field, fillSec:+((f.fillMs||0)/1000).toFixed(2)}))
+    };
+  });
+  const g=S.regionTime, gt=g.L+g.C+g.R||1;
+  return {
+    startedAt:new Date(S.startWall).toISOString(),
+    durationSec:+(nowRel()/1000).toFixed(2),
+    calibrated:S.calibrated,
+    viewport:{stageW:S.stageW||0,stageH:S.stageH||0,winW:window.innerWidth,winH:window.innerHeight},
+    totals:{pages:S.pages.length,clicks:S.clicks,fieldsFilled:S.fields,gazeSamples:S.gaze.length},
+    signals:{deadClicks:S.deadClicks,rageClicks:S.rageClicks,scrollThrash:S.thrash,maxScrollPct:S.maxScroll},
+    gazeDistribution:{left:+(g.L/gt*100).toFixed(1),center:+(g.C/gt*100).toFixed(1),right:+(g.R/gt*100).toFixed(1)},
+    pages,
+    events:S.events
+  };
+}
+function toEventsCSV(){
+  const rows=[["t_ms","type","detail","gazeRegion","extra"]];
+  S.events.forEach(e=>{
+    let detail="",extra="";
+    if(e.type==="page"){detail=e.title||e.url;extra=e.url;}
+    else if(e.type==="click"){detail=(e.txt||e.tag||"");extra=e.id||e.cls||"";}
+    else if(e.type==="field_blur"){detail=e.field;extra=((e.fillMs||0)/1000).toFixed(2)+"s";}
+    else if(e.type==="field_focus"){detail=e.field;}
+    else if(e.type==="marker"){detail=e.note||"";}
+    else if(e.type==="submit"){detail=e.form||"";}
+    rows.push([e.t,e.type,csv(detail),e.gazeRegion||"",csv(extra)]);
+  });
+  return rows.map(r=>r.join(",")).join("\n");
+}
+function toGazeCSV(){
+  // screen_* = full-window pixels (layer 2 raw); page_* = precise pixels on the tested page; h_region/cell = layer 1
+  const rows=[["t_ms","screen_x","screen_y","page_x","page_y","h_region","cell"]];
+  S.gaze.forEach(s=>rows.push([s.t,s.gx,s.gy,s.sx,s.sy,s.col,s.region]));
+  return rows.map(r=>r.join(",")).join("\n");
+}
+
+/* ============================ helpers ============================ */
+function csv(v){v=(v==null?"":String(v)).replace(/"/g,'""');return /[",\n]/.test(v)?'"'+v+'"':v;}
+function fmt(ms){const s=Math.floor(ms/1000);return String(Math.floor(s/60)).padStart(2,"0")+":"+String(s%60).padStart(2,"0");}
+function sleep(ms){return new Promise(r=>setTimeout(r,ms));}
+function downloadBlob(name,blob){const a=document.createElement("a");a.href=URL.createObjectURL(blob);
+  a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),4000);}
+function logLine(cls,msg){const el=$("log");const t=fmt(nowRel());
+  el.insertAdjacentHTML("afterbegin",`<div><span class="t">${t}</span> <span class="${cls}">${msg}</span></div>`);}
+window.addEventListener("beforeunload",e=>{ if(S.recording||S.blobs.screen||S.blobs.face){e.preventDefault();e.returnValue="";}});
+</script>
+</body>
+</html>

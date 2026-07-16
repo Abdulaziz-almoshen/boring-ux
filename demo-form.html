@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Demo Signup — Gaze UX test</title>
+<style>
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;
+    background:#f4f6fb;color:#1a2030;display:flex;min-height:100vh;align-items:center;justify-content:center;padding:24px}
+  .card{background:#fff;border-radius:16px;box-shadow:0 12px 40px rgba(20,30,60,.12);
+    width:100%;max-width:440px;padding:32px}
+  h1{margin:0 0 4px;font-size:22px}
+  p.sub{margin:0 0 22px;color:#6b7488;font-size:14px}
+  label{display:block;font-size:13px;font-weight:600;margin:14px 0 6px}
+  input,select{width:100%;padding:12px 14px;border:1px solid #d6dbe7;border-radius:10px;font-size:15px;outline:none}
+  input:focus,select:focus{border-color:#4f8cff;box-shadow:0 0 0 3px rgba(79,140,255,.15)}
+  .rowc{display:flex;gap:12px}
+  .rowc > div{flex:1}
+  button{margin-top:22px;width:100%;padding:13px;border:0;border-radius:10px;background:#4f8cff;color:#fff;
+    font-size:16px;font-weight:700;cursor:pointer}
+  button:hover{background:#3a78f0}
+  .step{display:none}.step.active{display:block}
+  .steps{display:flex;gap:6px;margin-bottom:20px}
+  .steps i{flex:1;height:4px;border-radius:3px;background:#e2e7f0}
+  .steps i.on{background:#4f8cff}
+  .done{text-align:center}.done .big{font-size:40px}
+  a.secondary{display:block;text-align:center;margin-top:12px;color:#6b7488;font-size:13px;text-decoration:none;cursor:pointer}
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="steps"><i class="on" id="s0"></i><i id="s1"></i><i id="s2"></i></div>
+
+    <form id="step0" class="step active" onsubmit="return next(1)">
+      <h1>Create your account</h1>
+      <p class="sub">Step 1 of 3 · Your details</p>
+      <label for="fullname">Full name</label>
+      <input id="fullname" name="fullname" placeholder="Jane Doe" required/>
+      <label for="email">Email address</label>
+      <input id="email" name="email" type="email" placeholder="jane@example.com" required/>
+      <button type="submit">Continue</button>
+    </form>
+
+    <form id="step1" class="step" onsubmit="return next(2)">
+      <h1>Secure it</h1>
+      <p class="sub">Step 2 of 3 · Password & plan</p>
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" placeholder="••••••••" required/>
+      <div class="rowc">
+        <div>
+          <label for="plan">Plan</label>
+          <select id="plan" name="plan"><option>Free</option><option>Pro</option><option>Team</option></select>
+        </div>
+        <div>
+          <label for="seats">Seats</label>
+          <input id="seats" name="seats" type="number" value="1" min="1"/>
+        </div>
+      </div>
+      <button type="submit">Continue</button>
+      <a class="secondary" onclick="go(0)">← Back</a>
+    </form>
+
+    <form id="step2" class="step" onsubmit="return finish(event)">
+      <h1>Almost done</h1>
+      <p class="sub">Step 3 of 3 · Confirm</p>
+      <label for="company">Company (optional)</label>
+      <input id="company" name="company" placeholder="Acme Inc."/>
+      <label for="code">Promo code</label>
+      <input id="code" name="code" placeholder="Where's this field? 👀"/>
+      <button type="submit">Create account</button>
+      <a class="secondary" onclick="go(1)">← Back</a>
+    </form>
+
+    <div id="step3" class="step done">
+      <div class="big">🎉</div>
+      <h1>You're in!</h1>
+      <p class="sub">Account created. (Demo — nothing was saved.)</p>
+      <a class="secondary" onclick="go(0)">Run the flow again</a>
+    </div>
+  </div>
+
+<script>
+  // fake multi-"page" flow using history so the tracker logs page changes + per-page time
+  function go(n){
+    document.querySelectorAll('.step').forEach(s=>s.classList.remove('active'));
+    document.getElementById('step'+n).classList.add('active');
+    for(var i=0;i<3;i++) document.getElementById('s'+i).classList.toggle('on', i<=n);
+    var titles=['Signup · Details','Signup · Password','Signup · Confirm','Signup · Done'];
+    document.title=titles[n];
+    history.pushState({n:n}, titles[n], '#step'+n);   // tracker.js picks this up as a "page"
+    window.scrollTo(0,0);
+  }
+  function next(n){ go(n); return false; }
+  function finish(e){ e.preventDefault(); go(3); return false; }
+  window.addEventListener('popstate', function(e){
+    if(e.state && typeof e.state.n==='number'){
+      document.querySelectorAll('.step').forEach(s=>s.classList.remove('active'));
+      document.getElementById('step'+e.state.n).classList.add('active');
+    }
+  });
+</script>
+<!-- the tracking snippet -->
+<script src="tracker.js"></script>
+</body>
+</html>

@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Boring UX — analyzer</title>
+<style>
+  :root{--bg:#0d0f14;--panel:#151a23;--panel2:#1b2130;--line:#2a3243;--text:#e7ecf3;--muted:#8a94a6;--accent:#4f8cff;--good:#37d67a;--bad:#ff5470;--warn:#ffb020}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;padding:20px;max-width:1120px;margin:0 auto}
+  h1{font-size:20px;margin:0 0 4px}.sub{color:var(--muted);font-size:13px;margin-bottom:14px}
+  button,select{background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:8px 12px;font-size:13px;cursor:pointer}
+  button.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+  button:disabled{opacity:.4;cursor:not-allowed}
+  /* drop zone */
+  #drop{border:2px dashed var(--line);border-radius:14px;padding:34px;text-align:center;background:var(--panel);transition:.15s}
+  #drop.hover{border-color:var(--accent);background:#161d2e}
+  #drop h2{margin:0 0 6px;font-size:17px}
+  #drop .row{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:12px}
+  .chips{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin-top:14px}
+  .chip{font-size:12px;border:1px solid var(--line);border-radius:999px;padding:4px 11px;color:var(--muted)}
+  .chip.ok{border-color:var(--good);color:#bff5d6}.chip.no{opacity:.5}
+  .hint{font-size:11px;color:var(--muted);line-height:1.5}
+  /* replay */
+  #app{display:none}
+  .bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:14px 0}
+  #scrub{width:100%}
+  .grid{display:grid;grid-template-columns:1.25fr .75fr;gap:14px}
+  @media(max-width:820px){.grid{grid-template-columns:1fr}}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px}
+  .card h3{font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin:0 0 8px}
+  #stage{position:relative;width:100%;background:#0a0d12;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+  #zones{position:absolute;inset:0;display:grid;grid-template-columns:1fr 1fr 1fr;pointer-events:none}
+  #zones div{border-right:1px dashed rgba(255,255,255,.1);display:flex;align-items:flex-start;justify-content:center;color:rgba(255,255,255,.25);font-size:11px;padding-top:4px}
+  #heat{position:absolute;inset:0}
+  #dot{position:absolute;width:26px;height:26px;margin:-13px 0 0 -13px;border-radius:50%;border:3px solid var(--accent);background:rgba(79,140,255,.28);box-shadow:0 0 18px rgba(79,140,255,.6);display:none}
+  video{width:100%;border-radius:8px;background:#000;max-height:260px;display:block}
+  .stat{display:flex;justify-content:space-between;font-size:13px;padding:3px 0}
+  .region{font-size:22px;font-weight:800;color:var(--accent)}
+  .meter{height:8px;background:var(--panel2);border-radius:6px;overflow:hidden;margin:3px 0}.meter i{display:block;height:100%;background:var(--accent)}
+  .note{font-size:11px;color:var(--muted);line-height:1.5;margin-top:6px}
+  /* report */
+  #report{display:none;background:#fff;color:#1a2233;border-radius:12px;padding:22px;margin-top:16px}
+  #report h2{font-size:18px;border-bottom:2px solid #e6eaf2;padding-bottom:5px;margin:22px 0 8px}
+  #report h3{font-size:14px;margin:16px 0 4px}
+  #report table{border-collapse:collapse;width:100%;font-size:12.5px;margin:8px 0}
+  #report th,#report td{border:1px solid #e0e5ee;padding:6px 9px;text-align:left}#report th{background:#f0f3f9}
+  #report .muted{color:#6b7488;font-size:12px}
+  .kpi{display:flex;gap:12px;flex-wrap:wrap;margin:8px 0}
+  .kpi div{background:#f5f7fb;border:1px solid #e6eaf2;border-radius:9px;padding:9px 13px;font-size:12px;min-width:110px}
+  .kpi b{display:block;font-size:20px;color:#26324a}
+  @media print{body{background:#fff;padding:0}#drop,#app>.bar,#app>#scrub,.grid,#genRow{display:none!important}#report{display:block!important;margin:0}}
+</style></head>
+<body>
+
+<h1>📤 Boring UX — Analyzer</h1>
+<div class="sub">Upload a recorded session (or any of its files) → replay the eyes + audio + video → generate an analysis report.</div>
+
+<div id="drop">
+  <h2>Drop session files here</h2>
+  <div class="hint">or pick them below · works with a whole <b>session-… folder</b> or individual files<br>
+  <b>gaze.csv</b> = eyes · <b>audio.webm</b> = sound · <b>screen/face video</b> = picture · <b>events.csv</b> = clicks/pages · <b>session.json</b> = metadata</div>
+  <div class="row">
+    <button class="primary" id="pickFolder">📁 Choose folder</button>
+    <button id="pickFiles">Choose files</button>
+    <input id="folderInput" type="file" webkitdirectory directory multiple style="display:none"/>
+    <input id="filesInput" type="file" multiple accept=".csv,.json,.webm,.mp4,.m4a,.mp3,.wav" style="display:none"/>
+  </div>
+  <div class="chips" id="chips">
+    <span class="chip no" data-k="gaze">👁 gaze.csv</span>
+    <span class="chip no" data-k="audio">🔊 audio</span>
+    <span class="chip no" data-k="screen">🖥 screen</span>
+    <span class="chip no" data-k="face">🙂 face</span>
+    <span class="chip no" data-k="events">🖱 events</span>
+    <span class="chip no" data-k="session">📄 session.json</span>
+  </div>
+</div>
+
+<div id="app">
+  <div class="bar">
+    <button id="playBtn" class="primary">▶ Play</button>
+    <span id="clock" style="font-variant-numeric:tabular-nums;color:var(--muted)">0:00 / 0:00</span>
+    <label style="color:var(--muted);font-size:12px">speed <select id="speed"><option>0.5</option><option selected>1</option><option>1.5</option><option>2</option></select></label>
+    <span style="flex:1"></span>
+    <span id="loaded" style="color:var(--muted);font-size:12px"></span>
+  </div>
+  <input id="scrub" type="range" min="0" max="1000" value="0"/>
+  <div class="grid" style="margin-top:12px">
+    <div class="card">
+      <h3>Gaze replay</h3>
+      <div id="stage"><div id="zones"><div>LEFT</div><div>CENTER</div><div>RIGHT</div></div><canvas id="heat"></canvas><div id="dot"></div></div>
+      <div class="note" id="gazeNote">Dot = where they looked, from gaze.csv.</div>
+    </div>
+    <div>
+      <div class="card" style="margin-bottom:12px">
+        <h3>At playhead</h3>
+        <div class="stat"><span>Region</span><span class="region" id="regionNow">—</span></div>
+        <div class="stat"><span>Cell (3×3)</span><b id="cellNow">—</b></div>
+        <div class="stat"><span>Gaze px</span><b id="pxNow">—</b></div>
+        <div class="stat"><span>Left</span><b id="pL">0%</b></div><div class="meter"><i id="mL"></i></div>
+        <div class="stat"><span>Center</span><b id="pC">0%</b></div><div class="meter"><i id="mC"></i></div>
+        <div class="stat"><span>Right</span><b id="pR">0%</b></div><div class="meter"><i id="mR"></i></div>
+      </div>
+      <div class="card" id="vidCard">
+        <h3>Screen / face video</h3>
+        <video id="screen" muted playsinline></video>
+        <video id="face" muted playsinline style="max-width:200px;margin-top:8px"></video>
+        <div class="note" id="vidNote"></div>
+      </div>
+    </div>
+  </div>
+  <div id="genRow" style="margin-top:16px;text-align:center">
+    <button class="primary" id="genBtn">📊 Generate analysis report</button>
+    <button id="printBtn" style="display:none">🖨 Print / Save PDF</button>
+    <div class="hint" style="margin-top:6px">Builds the quantitative report (gaze, heatmap, timing, frustration) from the data. Transcript-based sections need speech-to-text and aren't generated here.</div>
+  </div>
+  <div id="report"></div>
+  <audio id="audio"></audio>
+</div>
+
+<script>
+const $=id=>document.getElementById(id);
+const A=$("audio"),SCR=$("screen"),FACE=$("face");
+let files={}, gaze=[], events=[], sess=null, dur=0, urls=[], playing=false, raf=0, heatCtx=null, cumArr=[];
+
+/* ---------- file intake ---------- */
+function classify(name){
+  const n=name.toLowerCase();
+  if(n.includes('gaze')&&n.endsWith('.csv')) return 'gaze';
+  if(n.includes('event')&&n.endsWith('.csv')) return 'events';
+  if(n.endsWith('.json')) return 'session';
+  if((n.includes('audio')||n.endsWith('.mp3')||n.endsWith('.m4a')||n.endsWith('.wav'))&&!n.includes('screen')&&!n.includes('face')) return 'audio';
+  if(n.includes('face')&&(n.endsWith('.webm')||n.endsWith('.mp4'))) return 'face';
+  if(n.endsWith('.webm')||n.endsWith('.mp4')) return 'screen';
+  if(n.endsWith('.csv')) return 'gaze';
+  return 'other';
+}
+async function intake(fileList){
+  for(const f of fileList){
+    const k=classify(f.name);
+    if(k==='other') continue;
+    files[k]=f;
+  }
+  // update chips
+  document.querySelectorAll('#chips .chip').forEach(c=>{
+    c.classList.toggle('ok', !!files[c.dataset.k]); c.classList.toggle('no', !files[c.dataset.k]);
+  });
+  await load();
+}
+$("pickFolder").onclick=()=>$("folderInput").click();
+$("pickFiles").onclick=()=>$("filesInput").click();
+$("folderInput").onchange=e=>intake(e.target.files);
+$("filesInput").onchange=e=>intake(e.target.files);
+const dz=$("drop");
+["dragover","dragenter"].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.add('hover');}));
+["dragleave","drop"].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.remove('hover');}));
+dz.addEventListener("drop",e=>{ if(e.dataTransfer.files.length) intake(e.dataTransfer.files); });
+
+/* ---------- load & wire ---------- */
+function objURL(f){const u=URL.createObjectURL(f);urls.push(u);return u;}
+function num(v){if(v==null||v==="")return null;const n=+v;return isFinite(n)?n:null;}
+function parseGaze(txt){
+  const L=txt.trim().split(/\r?\n/),h=L.shift().split(",");const ix=n=>h.indexOf(n);
+  const it=ix("t_ms"),ir=ix("h_region"),ic=ix("cell");
+  const ipx=[ix("page_x"),ix("screen_x"),ix("gaze_x")].find(i=>i>=0);
+  const ipy=[ix("page_y"),ix("screen_y"),ix("gaze_y")].find(i=>i>=0);
+  const out=[];
+  for(const ln of L){if(!ln)continue;const c=ln.split(",");
+    out.push({t:num(c[it])||0,x:ipx<0?null:num(c[ipx]),y:ipy<0?null:num(c[ipy]),col:(ir<0?"":c[ir])||"",cell:(ic<0?"":c[ic])||""});}
+  out.sort((a,b)=>a.t-b.t);return out;
+}
+async function load(){
+  urls.forEach(u=>URL.revokeObjectURL(u));urls=[];
+  if(files.gaze) gaze=parseGaze(await files.gaze.text());
+  if(files.session) try{sess=JSON.parse(await files.session.text());}catch(e){sess=null;}
+  if(files.events) try{events=parseEvents(await files.events.text());}catch(e){events=[];}
+  dur = (sess&&sess.durationSec) || (gaze.length?gaze[gaze.length-1].t/1000:0) || 0;
+  // media
+  if(files.audio){A.src=objURL(files.audio);}else A.removeAttribute('src');
+  if(files.screen){SCR.src=objURL(files.screen);SCR.style.display='block';}else SCR.style.display='none';
+  if(files.face){FACE.src=objURL(files.face);FACE.style.display='block';}else FACE.style.display='none';
+  $("vidCard").style.display=(files.screen||files.face)?'block':'none';
+  // duration fallback if no session but has audio/video (webm has no duration -> fix)
+  if(!dur){ dur=await mediaDur(files.audio?A:(files.screen?SCR:null)); }
+  // aspect
+  const vp=(sess&&sess.viewport)||{}; const ar=(vp.stageW&&vp.stageH)?vp.stageH/vp.stageW:0.6;
+  const st=$("stage"); st.style.height=Math.round((st.clientWidth||600)*ar)+"px"; sizeHeat();
+  precompute();
+  $("drop").style.display='none'; $("app").style.display='block';
+  $("loaded").textContent = [files.gaze&&(gaze.length+" gaze"),files.audio&&"audio",files.screen&&"screen",files.face&&"face",files.events&&(events.length+" events")].filter(Boolean).join(" · ");
+  $("gazeNote").textContent = gaze.length? "Dot = where they looked, from gaze.csv ("+gaze.length+" samples)." : "No gaze.csv uploaded — eye replay unavailable.";
+  $("vidNote").textContent = (files.screen||files.face)? "Video synced to audio/timeline." : "";
+  $("clock").textContent="0:00 / "+fmt(dur); seek(0);
+  $("dot").style.display = gaze.length? "block":"none";
+}
+function mediaDur(el){return new Promise(res=>{ if(!el){res(0);return;} if(el.readyState>=1&&isFinite(el.duration)){res(el.duration);return;}
+  el.addEventListener('loadedmetadata',()=>{ if(el.duration===Infinity){el.currentTime=1e101;el.addEventListener('timeupdate',function h(){el.removeEventListener('timeupdate',h);el.currentTime=0;res(isFinite(el.duration)?el.duration:0);},{once:true});}else res(el.duration||0); },{once:true}); setTimeout(()=>res(el.duration||0),3000); });}
+function parseEvents(txt){
+  const L=txt.trim().split(/\r?\n/);const h=L.shift().split(",");const ix=n=>h.indexOf(n);
+  const it=ix("t_ms"),ity=ix("type"),id=ix("detail"),ig=ix("gazeRegion"),ie=ix("extra");
+  const out=[];for(const ln of L){if(!ln)continue;const c=splitCSV(ln);
+    out.push({t:num(c[it])||0,type:c[ity],detail:c[id]||"",gaze:c[ig]||"",extra:c[ie]||""});}
+  return out;
+}
+function splitCSV(l){const r=[];let cur="",q=false;for(let i=0;i<l.length;i++){const ch=l[i];if(ch=='"'){if(q&&l[i+1]=='"'){cur+='"';i++;}else q=!q;}else if(ch==','&&!q){r.push(cur);cur="";}else cur+=ch;}r.push(cur);return r;}
+
+/* ---------- replay ---------- */
+function fmt(s){s=Math.max(0,s||0);const m=Math.floor(s/60);return m+":"+String(Math.floor(s%60)).padStart(2,"0");}
+function sizeHeat(){const c=$("heat"),st=$("stage");c.width=st.clientWidth;c.height=st.clientHeight;heatCtx=c.getContext("2d");}
+function precompute(){cumArr=[];let L=0,C=0,R=0,last=0,lc=null;for(const s of gaze){if(lc&&(s.t-last)>0){if(lc==="L")L+=s.t-last;else if(lc==="C")C+=s.t-last;else if(lc==="R")R+=s.t-last;}cumArr.push({t:s.t,L,C,R});last=s.t;lc=s.col||lc;}}
+function nearest(tMs){if(!gaze.length)return -1;let lo=0,hi=gaze.length-1;while(lo<hi){const m=(lo+hi)>>1;if(gaze[m].t<tMs)lo=m+1;else hi=m;}return(lo>0&&Math.abs(gaze[lo-1].t-tMs)<Math.abs(gaze[lo].t-tMs))?lo-1:lo;}
+function render(){
+  const t=(A.src?A.currentTime:(SCR.src?SCR.currentTime:0))||0, tMs=t*1000;
+  $("clock").textContent=fmt(t)+" / "+fmt(dur); $("scrub").value=dur?Math.round(t/dur*1000):0;
+  const st=$("stage"),dot=$("dot");
+  if(gaze.length){
+    const i=nearest(tMs),g=gaze[i];
+    const vp=(sess&&sess.viewport)||{},sw=vp.stageW||1192,sh=vp.stageH||752;
+    if(g&&g.x!=null){const nx=Math.max(0,Math.min(1,g.x/sw)),ny=Math.max(0,Math.min(1,g.y/sh));
+      dot.style.left=(nx*st.clientWidth)+"px";dot.style.top=(ny*st.clientHeight)+"px";dot.style.borderColor=g.col==="C"?"var(--good)":"var(--accent)";dot.style.display="block";
+      if(playing&&heatCtx){heatCtx.globalCompositeOperation="destination-out";heatCtx.fillStyle="rgba(0,0,0,0.04)";heatCtx.fillRect(0,0,st.clientWidth,st.clientHeight);heatCtx.globalCompositeOperation="source-over";const gr=heatCtx.createRadialGradient(nx*st.clientWidth,ny*st.clientHeight,0,nx*st.clientWidth,ny*st.clientHeight,22);gr.addColorStop(0,"rgba(79,140,255,.5)");gr.addColorStop(1,"rgba(79,140,255,0)");heatCtx.fillStyle=gr;heatCtx.beginPath();heatCtx.arc(nx*st.clientWidth,ny*st.clientHeight,22,0,7);heatCtx.fill();}
+    }else dot.style.display="none";
+    $("regionNow").textContent=g&&g.col?({L:"◄ LEFT",C:"● CENTER",R:"RIGHT ►"}[g.col]||"—"):"—";
+    $("cellNow").textContent=g&&g.cell?g.cell:"—";$("pxNow").textContent=g&&g.x!=null?(g.x+", "+g.y):"—";
+    const cc=cumArr[i]||{L:0,C:0,R:0},tot=cc.L+cc.C+cc.R||1;
+    const pl=Math.round(cc.L/tot*100),pc=Math.round(cc.C/tot*100),pr=Math.round(cc.R/tot*100);
+    $("pL").textContent=pl+"%";$("mL").style.width=pl+"%";$("pC").textContent=pc+"%";$("mC").style.width=pc+"%";$("pR").textContent=pr+"%";$("mR").style.width=pr+"%";
+  }
+}
+function syncV(el){if(el&&el.src&&Math.abs((el.currentTime||0)-(A.src?A.currentTime:0))>0.35){try{el.currentTime=A.src?A.currentTime:el.currentTime;}catch(e){}}}
+function loop(){if(!playing)return;if(A.src){syncV(SCR);syncV(FACE);}render();raf=requestAnimationFrame(loop);}
+function play(){const m=A.src?A:SCR;if(!m.src)return;playing=true;$("playBtn").textContent="❚❚ Pause";
+  if(A.src)A.play(); if(SCR.src){SCR.muted=true;SCR.play().catch(()=>{});} if(FACE.src){FACE.muted=true;FACE.play().catch(()=>{});} loop();}
+function stop(){playing=false;$("playBtn").textContent="▶ Play";A.pause&&A.pause();SCR.pause&&SCR.pause();FACE.pause&&FACE.pause();cancelAnimationFrame(raf);}
+function seek(t){t=Math.max(0,Math.min(t,dur));if(A.src)A.currentTime=t;if(SCR.src)try{SCR.currentTime=t;}catch(e){}if(FACE.src)try{FACE.currentTime=t;}catch(e){}if(heatCtx){const st=$("stage");heatCtx.clearRect(0,0,st.clientWidth,st.clientHeight);}render();}
+$("playBtn").onclick=()=>playing?stop():play();
+$("scrub").addEventListener("input",e=>seek(e.target.value/1000*dur));
+$("speed").onchange=e=>{const r=+e.target.value;A.playbackRate=r;SCR.playbackRate=r;FACE.playbackRate=r;};
+window.addEventListener("resize",()=>{const st=$("stage");const vp=(sess&&sess.viewport)||{};const ar=(vp.stageW&&vp.stageH)?vp.stageH/vp.stageW:0.6;st.style.height=Math.round(st.clientWidth*ar)+"px";sizeHeat();render();});
+
+/* ---------- report (quantitative, client-side) ---------- */
+$("genBtn").onclick=genReport;
+$("printBtn").onclick=()=>window.print();
+function genReport(){
+  if(!gaze.length){alert("Upload gaze.csv to generate the gaze report.");return;}
+  const R=gaze;const n=R.length;
+  // dwell
+  const dw={L:0,C:0,R:0};let last=null,lc=null,sw=0,on=0,off=0;const cells={};
+  for(const s of R){if(s.x!=null)on++;else off++;if(last!=null&&lc in dw&&(s.t-last)>0&&(s.t-last)<2000)dw[lc]+=s.t-last;if(lc&&s.col&&s.col!==lc)sw++;cells[s.cell]=(cells[s.cell]||0)+1;last=s.t;lc=s.col||lc;}
+  const tot=dw.L+dw.C+dw.R||1;
+  // fixations
+  let fix=[],cx=cy=st=lt=null,cnt=0;const flush=()=>{if(st!=null&&lt-st>=250&&cnt>=3)fix.push(lt-st);};
+  for(const s of R){if(s.x==null){flush();cx=null;continue;}if(cx==null){cx=s.x;cy=s.y;st=s.t;lt=s.t;cnt=1;}else if(Math.abs(s.x-cx)<70&&Math.abs(s.y-cy)<70){cx=(cx*cnt+s.x)/(cnt+1);cy=(cy*cnt+s.y)/(cnt+1);cnt++;lt=s.t;}else{flush();cx=s.x;cy=s.y;st=s.t;lt=s.t;cnt=1;}}flush();
+  const longfix=fix.filter(d=>d>1000).length;
+  // events / pages / frustration
+  const pages=events.filter(e=>e.type==='page');
+  const clicks=events.filter(e=>e.type==='click');
+  const dead=(sess&&sess.signals&&sess.signals.deadClicks) ?? clicks.filter(c=>/dead/i.test(c.extra)).length;
+  const rage=(sess&&sess.signals&&sess.signals.rageClicks) ?? events.filter(e=>e.type==='rage_click').length;
+  const thrash=(sess&&sess.signals&&sess.signals.scrollThrash) ?? events.filter(e=>e.type==='scroll_thrash').length;
+  // per-page timing
+  let pageRows='';
+  for(let i=0;i<pages.length;i++){const s=pages[i].t,e=(i+1<pages.length?pages[i+1].t:dur*1000);pageRows+=`<tr><td>${esc(pages[i].detail||pages[i].extra||'page '+(i+1))}</td><td>${((e-s)/1000).toFixed(1)}s</td><td>${clicks.filter(c=>c.t>=s&&c.t<e).length}</td></tr>`;}
+  // heatmap 3x3
+  const order=[["TL","TC","TR"],["ML","MC","MR"],["BL","BC","BR"]];const mx=Math.max(...Object.values(cells),1);
+  let heat='<table style="width:auto"><tr>'+["","L","C","R"].map(h=>`<th>${h}</th>`).join('')+'</tr>';
+  order.forEach((row,ri)=>{heat+=`<tr><th>${['T','M','B'][ri]}</th>`+row.map(c=>{const v=cells[c]||0;const a=v/mx;return `<td style="background:rgba(211,51,51,${(0.1+a*0.85).toFixed(2)});color:${a>.5?'#fff':'#333'};text-align:center;font-weight:700">${Math.round(v/n*100)}%</td>`;}).join('')+'</tr>';});
+  heat+='</table>';
+  // ribbon svg
+  const W=880,BW=2.4,NB=Math.floor(W/BW),CR={L:'#e8871e',C:'#4f8cff',R:'#0a9d54','':'#cbd2df'};
+  let rib=`<svg viewBox="0 0 ${W} 30" style="width:100%">`;
+  for(let i=0;i<NB;i++){const s=i/NB*dur*1000,e=(i+1)/NB*dur*1000;const seg=R.filter(x=>x.t>=s&&x.t<e);let reg='';if(seg.length){const cc={};let ons=0;seg.forEach(x=>{if(x.col)cc[x.col]=(cc[x.col]||0)+1;if(x.x!=null)ons++;});reg=ons>seg.length*0.4?(Object.keys(cc).sort((a,b)=>cc[b]-cc[a])[0]||''):'';}rib+=`<rect x="${(i*BW).toFixed(1)}" y="4" width="${(BW+0.3).toFixed(1)}" height="22" fill="${CR[reg]}"/>`;}
+  rib+='</svg>';
+  const html=`
+  <h2>Session analysis report</h2>
+  <div class="muted">Generated in-browser from the uploaded data · ${new Date().toLocaleString()}</div>
+  <div class="kpi"><div><b>${fmt(dur)}</b>duration</div><div><b>${n.toLocaleString()}</b>gaze samples</div><div><b>${Math.round(on/n*100)}%</b>eyes on-screen</div><div><b>${Math.round(sw/(dur/60))}</b>switches/min</div><div><b>${fix.length}</b>fixations (${longfix} long)</div></div>
+  <h3>Gaze distribution (dwell)</h3>
+  <table><tr><th>Left</th><th>Center</th><th>Right</th></tr><tr><td>${Math.round(dw.L/tot*100)}%</td><td>${Math.round(dw.C/tot*100)}%</td><td>${Math.round(dw.R/tot*100)}%</td></tr></table>
+  <h3>Attention over time (orange=L · blue=C · green=R · grey=away)</h3>${rib}
+  <h3>Attention heatmap (3×3)</h3>${heat}
+  <h3>Frustration signals</h3>
+  <table><tr><th>Dead clicks</th><th>Rage clicks</th><th>Scroll thrash</th><th>Clicks</th><th>Pages</th></tr><tr><td>${dead||0}</td><td>${rage||0}</td><td>${thrash||0}</td><td>${clicks.length}</td><td>${pages.length}</td></tr></table>
+  ${pages.length?`<h3>Time per page</h3><table><tr><th>Page</th><th>Time</th><th>Clicks</th></tr>${pageRows}</table>`:'<h3>Time per page</h3><div class="muted">No page/click events (events.csv missing or the site had no tracker snippet).</div>'}
+  <h3>Not included</h3>
+  <div class="muted">Transcript-based analysis (what the user said, intent, per-quote gaze) needs speech-to-text and isn't generated in the browser. Gaze positions are exact only if the session was calibrated.</div>`;
+  $("report").innerHTML=html; $("report").style.display='block'; $("printBtn").style.display='inline-block';
+  $("report").scrollIntoView({behavior:'smooth'});
+}
+function esc(s){return (s||"").replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+</script>
+</body></html>

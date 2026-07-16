@@ -1,0 +1,12 @@
+# recorded sessions — never commit participant data
+session-*/
+*.webm
+*.mp4
+*.wav
+*.srt
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/

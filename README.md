@@ -26,6 +26,18 @@ Usability testing normally means a $30k eye-tracker or a per-seat SaaS. This doe
 
 100% client-side. Your recordings never leave your machine.
 
+## ▶️ See it in action
+
+<p align="center">
+<img src="screenshots/live-recording.png" width="90%" alt="Live recording — gaze heat trail over the page, WebGazer face mesh, and the live panel"/>
+<br><em>Live session — the <b>precise-pixel heat trail</b> follows the eyes across the page, the WebGazer <b>face mesh</b> tracks the participant, and the panel shows the region + frustration signals in real time.</em>
+</p>
+
+<p align="center">
+<img src="screenshots/replay-report.png" width="90%" alt="Session replay — gaze replay synced to audio and video"/>
+<br><em>Replay — the <b>gaze replay</b> plays synced to audio + video, with live left/center/right, 3×3 cell, and pixel readouts at the playhead.</em>
+</p>
+
 ## Quick start
 
 ```bash

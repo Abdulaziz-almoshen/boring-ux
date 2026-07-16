@@ -26,20 +26,6 @@ Usability testing normally means a $30k eye-tracker or a per-seat SaaS. This doe
 
 100% client-side. Your recordings never leave your machine.
 
-## ▶️ See it in action
-
-<p align="center">
-<img src="screenshots/live-recording.png" width="80%" alt="Live recording — gaze dot moving over the site under test"/>
-<br><em>Live session — the gaze dot tracks the eyes over the site under test, with the two layers and frustration signals updating in real time.</em>
-</p>
-
-<p align="center">
-<img src="screenshots/replay-report.png" width="80%" alt="Replay + generated report — gaze replay synced to audio and video, with the analysis report"/>
-<br><em>Replay + report — the eyes replay on the left synced to audio + video, then one click generates the analysis (heatmap, attention-over-time, timing, frustration).</em>
-</p>
-
-> 📸 **Maintainers:** drop your own captures at `screenshots/live-recording.png` and `screenshots/replay-report.png` and they'll appear here. (These two are best grabbed live — a headless browser can't run a real webcam or load a session.)
-
 ## Quick start
 
 ```bash

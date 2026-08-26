@@ -91,9 +91,12 @@ The in-browser recorder only loads sites that allow framing. To eye-track **any 
 3. Go to any website → click the **Boring UX** toolbar icon → a panel appears
 4. **Enable camera → Calibrate (13 dots + accuracy check) → Start** → do the task → **Stop & save**
 
-It downloads a full `session-…/` (gaze.csv, mouse.csv, events.csv, session.json, **SESSION-AI.md**, face/audio/optional screen) — the same AI-ready bundle, from any site. ⚠ Keep the tab in front while recording (eye tracking pauses on hidden tabs; it warns you).
+It downloads a full `session-…/` (gaze.csv, mouse.csv, events.csv, session.json, **SESSION-AI.md**, face/audio/optional screen) — the same AI-ready bundle, from any site. ⚠ Keep the tab in front while recording (eye tracking pauses on hidden tabs; it warns you). The **webcam preview is hidden by default** (still recorded to `face.webm`); a toggle shows a small corner preview for framing, and you can hide the gaze dot so the participant never sees it.
 
-> Note: the extension weakens nothing on the visited site — it only reads gaze/interaction locally and saves to your machine. Removing a site's own security headers via proxies is **not** how this works, by design.
+### Locked-down sites (`Permissions-Policy: camera=()`)
+A few sites disable the camera for everything in their page via a `Permissions-Policy` header — so even with camera permission granted, in-page tracking is blocked. For these, the extension applies a **local testing override**: on activation it strips that header (and `X-Frame-Options`) from the response **in your browser only**, for the domain you're testing, then reloads so the camera works.
+
+> ⚠️ **Use responsibly.** This override changes **nothing** on the site's servers and affects **no other user** — it only alters the response your own browser enforces, for sites you own or are **authorized to test**. It's the same technique QA tools (e.g. Requestly) use for internal testing. It is **not** a way to attack a site, and it should stay **off for normal browsing** (it's scoped per-domain and is removed when you disable the extension). Don't use it on sites you don't have permission to test.
 
 ## What a session folder contains
 

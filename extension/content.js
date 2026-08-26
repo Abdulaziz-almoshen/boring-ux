@@ -31,13 +31,17 @@ css.textContent = `
 .bux-caldot{position:absolute;width:34px;height:34px;border-radius:50%;background:#ff5470;border:3px solid #fff;
  cursor:pointer;transform:translate(-50%,-50%);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#fff}
 .bux-caldot.done{background:#37d67a;color:#04210f}
-#webgazerVideoContainer{z-index:2147483645!important;opacity:.85}`;
+#webgazerVideoContainer{display:none!important;z-index:2147483645!important;top:auto!important;bottom:64px!important;left:10px!important;right:auto!important;width:180px!important;height:auto!important;opacity:.92;border-radius:10px;overflow:hidden;box-shadow:0 6px 24px rgba(0,0,0,.5)}
+html.bux-show-cam #webgazerVideoContainer{display:block!important}
+#webgazerFaceOverlay,#webgazerFaceFeedbackBox{display:none!important}`;
 document.documentElement.appendChild(css);
 
 const panel = document.createElement("div"); panel.id="bux-panel";
 panel.innerHTML = `<h4>😴 Boring UX <small>any-site</small></h4>
  <button class="pri" id="bux-cam">Enable camera</button>
+ <button id="bux-cam-view" disabled style="font-size:12px;padding:6px">👁 Show camera preview</button>
  <button id="bux-cal-btn" disabled>Calibrate gaze</button>
+ <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#8a94a6;margin:4px 0"><input type="checkbox" id="bux-dot-toggle" checked> show gaze dot (hide for participant)</label>
  <button class="go" id="bux-start" disabled>● Start</button>
  <button class="stop" id="bux-stop" disabled>■ Stop &amp; save</button>
  <div class="row"><span>Region</span><b id="bux-region">—</b></div>
@@ -52,7 +56,7 @@ const setHint = t => $("bux-hint").textContent = t;
 /* ---------- gaze ---------- */
 function onGaze(data){
   if(!data) return; const gx=data.x, gy=data.y; S.lastGx=gx; S.lastGy=gy;
-  dot.style.left=gx+"px"; dot.style.top=gy+"px";
+  if(S.showDot!==false){ dot.style.display="block"; dot.style.left=gx+"px"; dot.style.top=gy+"px"; } else dot.style.display="none";
   const W=innerWidth,H=innerHeight; let col=null,cell="outside";
   if(gx>=0&&gx<=W&&gy>=0&&gy<=H){
     const fx=gx/W, fy=gy/H;
@@ -69,15 +73,22 @@ function onGaze(data){
 }
 async function waitFeed(){ for(let i=0;i<40;i++){ const v=document.getElementById("webgazerVideoFeed"); if(v&&v.srcObject&&v.srcObject.getVideoTracks().length) return v.srcObject.getVideoTracks()[0]; await sleep(200);} return null; }
 
+$("bux-cam-view").onclick = () => {
+  const on = document.documentElement.classList.toggle("bux-show-cam");
+  $("bux-cam-view").textContent = on ? "🙈 Hide camera preview" : "👁 Show camera preview";
+};
+$("bux-dot-toggle").onchange = e => { S.showDot = e.target.checked; if(!S.showDot) dot.style.display="none"; };
+S.showDot = true;
 $("bux-cam").onclick = async () => {
   $("bux-cam").disabled=true; $("bux-cam").textContent="Starting…";
   try{
     if(!window.webgazer){ alert("WebGazer not loaded"); return; }
     webgazer.params.showVideoPreview=true; webgazer.showPredictionPoints(false); webgazer.applyKalmanFilter(true);
     await webgazer.setRegression("ridge").setGazeListener(onGaze).begin();
+    try{ webgazer.showFaceOverlay(false); webgazer.showFaceFeedbackBox(false); }catch(_){}
     S.camTrack = await waitFeed(); S.camReady=true;
-    $("bux-cam").textContent="Camera on ✓"; $("bux-cal-btn").disabled=false; $("bux-start").disabled=false;
-    dot.style.display="block"; setHint("Calibrate for accuracy, then Start.");
+    $("bux-cam").textContent="Camera on ✓"; $("bux-cal-btn").disabled=false; $("bux-start").disabled=false; $("bux-cam-view").disabled=false;
+    dot.style.display="block"; setHint("Face hidden by default. Calibrate, then Start. (Camera still records to face.webm.)");
   }catch(e){
     $("bux-cam").disabled=false; $("bux-cam").textContent="Enable camera";
     // Distinguish site-policy block from a normal permission/in-use error
@@ -232,5 +243,9 @@ function dl(name,text){ dlBlob(name,new Blob([text],{type:"text/plain"})); }
 function dlBlob(name,blob){ const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=name;
   document.documentElement.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(a.href),8000); }
 
-setHint("Ready. Enable camera to begin.");
+// Show whether the local header-override made the camera usable on a locked-down site
+try{
+  const ok = !(document.featurePolicy && document.featurePolicy.allowsFeature && !document.featurePolicy.allowsFeature("camera"));
+  setHint(ok ? "Ready. Enable camera to begin." : "⚠ This site still blocks camera by policy — reload once via the toolbar icon to apply the testing override.");
+}catch(_){ setHint("Ready. Enable camera to begin."); }
 })();

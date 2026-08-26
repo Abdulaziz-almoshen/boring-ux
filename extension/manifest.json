@@ -3,7 +3,7 @@
   "name": "Boring UX — eye-tracking on any site",
   "version": "0.1.0",
   "description": "Webcam eye-tracking usability recorder that runs on ANY website (no iframe, no X-Frame-Options limits). Records gaze + face + audio + clicks + mouse, saves an AI-ready session.",
-  "permissions": ["scripting", "activeTab", "downloads", "storage"],
+  "permissions": ["scripting", "activeTab", "downloads", "storage", "declarativeNetRequest", "tabs"],
   "host_permissions": ["<all_urls>"],
   "background": { "service_worker": "background.js" },
   "action": { "default_title": "Boring UX — start / stop on this page" },

@@ -111,7 +111,9 @@
       <iframe id="stage" allow="camera; microphone; fullscreen"></iframe>
       <div id="placeholder">
         <h2>1 · Enter your site URL and press Load</h2>
-        <div class="hint">Your page must include the tracker snippet:<br><code>&lt;script src="tracker.js"&gt;&lt;/script&gt;</code><br>(see README.md). Then: <b>Enable camera → Calibrate → Start.</b></div>
+        <div class="hint">Your page must include the tracker snippet:<br><code>&lt;script src="tracker.js"&gt;&lt;/script&gt;</code><br>(see README.md). Then: <b>Enable camera → Calibrate → Start.</b><br><br>
+        ⚠ The tested site must stay <b>inside this frame</b>, and this tab must stay <b>in front</b> — eye tracking pauses if you switch tabs.<br>
+        Sites that show <i>“refused to connect”</i> block framing (X-Frame-Options) and can’t be eye-tracked — use a staging build without it, or try <code>demo-form.html</code>.</div>
       </div>
       <div id="grid">
         <div data-r="TL"></div><div data-r="TC"></div><div data-r="TR"></div>
@@ -246,13 +248,36 @@ $("panelToggle").onclick=()=>{
 /* ============================ Load target site ============================ */
 $("loadBtn").onclick=loadSite;
 $("url").addEventListener("keydown",e=>{if(e.key==="Enter")loadSite();});
+let lastPageMsgAt=0;
 function loadSite(){
   let u=$("url").value.trim();
   if(!u){toast("Enter your site URL first");return;}
   if(!/^https?:\/\//i.test(u)) u="https://"+u;
   $("stage").src=u; $("placeholder").style.display="none";
   logLine("system","loading "+u);
+  // If the page never reports in, it either refuses framing (X-Frame-Options) or lacks tracker.js
+  const loadedAt=performance.now();
+  setTimeout(()=>{
+    if(lastPageMsgAt<loadedAt){
+      logLine("mk","⚠ no signal from the page — if it shows “refused to connect”, the site blocks framing (X-Frame-Options) and can’t be eye-tracked here; otherwise it just lacks tracker.js (gaze/audio/video still work, clicks won’t)");
+      toast("⚠ Page didn’t report in. If it says “refused to connect”, this site can’t be loaded in the frame — test a staging build without X-Frame-Options, or use demo-form.html.",8000);
+    }
+  },6000);
 }
+
+/* Eye tracking only runs while THIS tab is visible & focused — warn hard if the moderator tabs away */
+document.addEventListener("visibilitychange",()=>{
+  if(!S.recording) return;
+  const t=Math.round(nowRel());
+  if(document.hidden){
+    S.events.push({type:"tracking_paused",t});
+    logLine("mk","⚠ tab hidden — EYE TRACKING PAUSED (keep this tab in front; the tested site must stay inside the frame)");
+  }else{
+    S.events.push({type:"tracking_resumed",t});
+    toast("⚠ Eye tracking was PAUSED while this tab was in the background — gaze data has a gap.",6000);
+    logLine("mk","tab visible again — eye tracking resumed");
+  }
+});
 
 /* ============================ Camera + WebGazer ============================ */
 $("camBtn").onclick=async()=>{
@@ -440,6 +465,7 @@ async function runValidation(){
 window.addEventListener("message",ev=>{
   const d=ev.data;
   if(!d||d.__uxr!==true) return;
+  lastPageMsgAt=performance.now();
   const t=nowRel();
   const e={...d,t:Math.round(t)}; delete e.__uxr;
   if(S.recording) S.events.push(e);
@@ -800,6 +826,8 @@ function buildAIBundle(){
     else if(e.type==="field_blur") l=`FIELD-DONE ${e.field} fill=${((e.fillMs||0)/1000).toFixed(1)}s`;
     else if(e.type==="submit") l=`SUBMIT ${e.form||""}`;
     else if(e.type==="marker") l=`MARKER "${e.note||""}"`;
+    else if(e.type==="tracking_paused") l=`⚠ EYE-TRACKING PAUSED (recorder tab went to background — gaze gap starts here)`;
+    else if(e.type==="tracking_resumed") l=`EYE-TRACKING RESUMED`;
     else l=e.type.toUpperCase();
     lines.push([e.t,l]);
   }
@@ -816,7 +844,7 @@ Everything an AI agent needs to analyze this usability session, in one file. Sta
 \`\`\`json
 ${JSON.stringify(meta,null,2)}
 \`\`\`
-Data quality: calibrated=${S.calibrated}${S.accuracyPx!=null?`, measured gaze accuracy ≈ ${S.accuracyPx}px (median validation error)`:", accuracy not measured"}. Gaze positions closer than the accuracy radius should be treated as directional. ${S.events.some(e=>e.type==="click")?"Clicks/pages captured via tracker snippet.":"NOTE: no click/page events — the tested site did not include tracker.js."}
+Data quality: calibrated=${S.calibrated}${S.accuracyPx!=null?`, measured gaze accuracy ≈ ${S.accuracyPx}px (median validation error)`:", accuracy not measured"}. Gaze positions closer than the accuracy radius should be treated as directional. ${S.events.some(e=>e.type==="click")?"Clicks/pages captured via tracker snippet.":"NOTE: no click/page events — the tested site did not include tracker.js."}${S.events.some(e=>e.type==="tracking_paused")?" ⚠ The recorder tab was backgrounded during the session — gaze has gaps (marked in the timeline); treat gaze coverage as partial.":""}
 
 ## Files in this folder
 - audio.webm — participant voice (transcribe with whisper: \`ffmpeg -i audio.webm -ar 16000 -ac 1 a.wav && whisper-cli -m ggml-large-v3-turbo.bin -f a.wav -l auto -osrt -of transcript\`)

@@ -64,7 +64,11 @@ To capture clicks, page-time, and frustration signals, add the snippet to the si
 ```html
 <script src="tracker.js"></script>
 ```
-Gaze + audio + video work without it; **clicks/pages/field-times need it** (a browser can't see another site's clicks otherwise). No snippet, no site? Load the included **`demo-form.html`** to try the whole loop.
+Gaze + audio + video work without it; **clicks/pages/field-times/mouse need it** (a browser can't see another site's clicks otherwise). No snippet, no site? Load the included **`demo-form.html`** to try the whole loop.
+
+> **Two rules that make or break a session:**
+> 1. **The tested site must stay inside the frame, and the recorder tab must stay in front.** Eye tracking runs in the recorder tab — Chrome pauses it the moment the tab goes to the background. The recorder now warns you live and marks the gap in the data. (`tracker.js` also rewrites `target="_blank"` links to stay in-frame.)
+> 2. **Sites that show "refused to connect" block framing** (`X-Frame-Options`/CSP) and cannot be eye-tracked in any browser tool — test a staging build without that header.
 
 ### Replay & analyze
 Click **📤 Open / Replay session** (or open `analyze.html`) → drag your `session-…` folder in → press **Play** to watch the eyes + audio + video → **📊 Generate analysis report** → **🖨 Print / Save PDF**.

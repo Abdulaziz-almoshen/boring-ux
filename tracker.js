@@ -66,6 +66,12 @@
     return false;
   }
 
+  // ---- keep navigation inside the frame: a new tab escapes the eye tracker ----
+  document.addEventListener("click", function (e) {
+    var a = e.target && e.target.closest ? e.target.closest("a[target]") : null;
+    if (a && (a.target === "_blank" || a.target === "_top")) a.target = "_self";
+  }, true);
+
   // ---- clicks (+ dead-click flag + rage-click detection) ----
   document.addEventListener("click", function (e) {
     var el = e.target || {};

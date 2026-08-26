@@ -78,7 +78,20 @@ $("bux-cam").onclick = async () => {
     S.camTrack = await waitFeed(); S.camReady=true;
     $("bux-cam").textContent="Camera on ✓"; $("bux-cal-btn").disabled=false; $("bux-start").disabled=false;
     dot.style.display="block"; setHint("Calibrate for accuracy, then Start.");
-  }catch(e){ $("bux-cam").disabled=false; $("bux-cam").textContent="Enable camera"; alert("Camera failed: "+e.message); }
+  }catch(e){
+    $("bux-cam").disabled=false; $("bux-cam").textContent="Enable camera";
+    // Distinguish site-policy block from a normal permission/in-use error
+    let policyBlocked=false;
+    try{ if(document.featurePolicy && document.featurePolicy.allowsFeature && !document.featurePolicy.allowsFeature("camera")) policyBlocked=true; }catch(_){}
+    if(e && e.name==="NotAllowedError" && policyBlocked){
+      alert("This site blocks the camera via its own security policy (Permissions-Policy: camera=()).\n\nThe user permission is fine — the SITE forbids camera for anything in its page, including this tool. It can't be eye-tracked in this mode.\n\nWorks on the vast majority of sites that don't set this; for locked-down sites we need the offscreen-camera build.");
+      setHint("⚠ Site policy blocks camera (Permissions-Policy). Try another site, or ask for the offscreen build.");
+    } else if(e && e.name==="NotReadableError"){
+      alert("Camera is in use by another tab/app. Close the other tab (e.g. the localhost recorder) and try again.");
+    } else {
+      alert("Camera failed: "+(e&&e.message||e)+"\nAllow camera for this site and make sure Chrome has camera access in macOS System Settings › Privacy › Camera.");
+    }
+  }
 };
 
 /* ---------- calibration + validation ---------- */

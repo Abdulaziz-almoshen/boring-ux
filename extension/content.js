@@ -1,0 +1,223 @@
+/* Boring UX — content script. Runs INSIDE the real page, so it eye-tracks any site.
+   Captures gaze + clicks + mouse + scroll + pages natively (no tracker.js), records
+   face + mic (+ optional screen), and downloads an AI-ready session on stop. */
+(function () {
+if (window.__boringUX) { window.__boringUX.toggle(); return; }
+
+const S = {
+  recording:false, calibrated:false, accuracyPx:null, startPerf:0, startWall:0,
+  gaze:[], mouse:[], events:[], pages:[], lastGx:null, lastGy:null, lastRegion:null, lastGazeT:0,
+  regionTime:{L:0,C:0,R:0}, recorders:[], chunks:{face:[],audio:[],screen:[]}, recentClicks:[],
+  lastMouse:0, sw:0, lastDir:0, dirChanges:0, dirWinStart:0, maxScroll:0
+};
+window.__boringUX = { toggle: () => { panel.style.display = panel.style.display==="none"?"block":"none"; } };
+const nowRel = () => S.startPerf ? performance.now()-S.startPerf : 0;
+
+/* ---------- UI ---------- */
+const css = document.createElement("style");
+css.textContent = `
+#bux-panel{position:fixed;top:14px;right:14px;z-index:2147483647;width:230px;background:#151a23;color:#e7ecf3;
+ font:13px -apple-system,Segoe UI,Roboto,Arial;border:1px solid #2a3243;border-radius:12px;box-shadow:0 10px 40px rgba(0,0,0,.5);padding:12px}
+#bux-panel h4{margin:0 0 8px;font-size:13px}#bux-panel small{color:#8a94a6}
+#bux-panel button{width:100%;margin:4px 0;padding:8px;border-radius:8px;border:1px solid #2a3243;background:#1b2130;color:#e7ecf3;font-size:13px;cursor:pointer}
+#bux-panel button.pri{background:#4f8cff;border-color:#4f8cff;color:#fff;font-weight:600}
+#bux-panel button.go{background:#37d67a;border-color:#37d67a;color:#04210f;font-weight:700}
+#bux-panel button.stop{background:#ff5470;border-color:#ff5470;color:#fff;font-weight:700}
+#bux-panel .row{display:flex;justify-content:space-between;margin:4px 0}
+#bux-dot{position:fixed;width:26px;height:26px;margin:-13px 0 0 -13px;border-radius:50%;border:3px solid #4f8cff;
+ background:rgba(79,140,255,.25);box-shadow:0 0 18px rgba(79,140,255,.6);z-index:2147483646;pointer-events:none;display:none}
+#bux-cal{position:fixed;inset:0;background:rgba(6,8,12,.94);z-index:2147483647;display:none}
+#bux-cal .msg{position:absolute;top:24px;left:0;right:0;text-align:center;font-size:15px;color:#fff}
+.bux-caldot{position:absolute;width:34px;height:34px;border-radius:50%;background:#ff5470;border:3px solid #fff;
+ cursor:pointer;transform:translate(-50%,-50%);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#fff}
+.bux-caldot.done{background:#37d67a;color:#04210f}
+#webgazerVideoContainer{z-index:2147483645!important;opacity:.85}`;
+document.documentElement.appendChild(css);
+
+const panel = document.createElement("div"); panel.id="bux-panel";
+panel.innerHTML = `<h4>😴 Boring UX <small>any-site</small></h4>
+ <button class="pri" id="bux-cam">Enable camera</button>
+ <button id="bux-cal-btn" disabled>Calibrate gaze</button>
+ <button class="go" id="bux-start" disabled>● Start</button>
+ <button class="stop" id="bux-stop" disabled>■ Stop &amp; save</button>
+ <div class="row"><span>Region</span><b id="bux-region">—</b></div>
+ <div class="row"><span>Gaze</span><b id="bux-status">idle</b></div>
+ <div style="font-size:11px;color:#8a94a6;margin-top:6px" id="bux-hint">Enable camera → Calibrate → Start. Stay on this tab while recording.</div>`;
+document.documentElement.appendChild(panel);
+const dot = document.createElement("div"); dot.id="bux-dot"; document.documentElement.appendChild(dot);
+const cal = document.createElement("div"); cal.id="bux-cal"; cal.innerHTML='<div class="msg"></div>'; document.documentElement.appendChild(cal);
+const $ = id => document.getElementById(id);
+const setHint = t => $("bux-hint").textContent = t;
+
+/* ---------- gaze ---------- */
+function onGaze(data){
+  if(!data) return; const gx=data.x, gy=data.y; S.lastGx=gx; S.lastGy=gy;
+  dot.style.left=gx+"px"; dot.style.top=gy+"px";
+  const W=innerWidth,H=innerHeight; let col=null,cell="outside";
+  if(gx>=0&&gx<=W&&gy>=0&&gy<=H){
+    const fx=gx/W, fy=gy/H;
+    col = fx<1/3?"L":fx>2/3?"R":"C";
+    const row = fy<1/3?"T":fy>2/3?"B":"M";
+    cell = row+col;
+  }
+  $("bux-region").textContent = col?({L:"◄ LEFT",C:"● CTR",R:"RIGHT ►"}[col]):"—";
+  if(S.recording){
+    const t=nowRel();
+    S.gaze.push({t:Math.round(t),x:Math.round(gx),y:Math.round(gy),col:col||"",cell});
+    if(col){ if(S.lastRegion&&S.lastGazeT) S.regionTime[S.lastRegion]+=(t-S.lastGazeT); S.lastRegion=col; S.lastGazeT=t; }
+  }
+}
+async function waitFeed(){ for(let i=0;i<40;i++){ const v=document.getElementById("webgazerVideoFeed"); if(v&&v.srcObject&&v.srcObject.getVideoTracks().length) return v.srcObject.getVideoTracks()[0]; await sleep(200);} return null; }
+
+$("bux-cam").onclick = async () => {
+  $("bux-cam").disabled=true; $("bux-cam").textContent="Starting…";
+  try{
+    if(!window.webgazer){ alert("WebGazer not loaded"); return; }
+    webgazer.params.showVideoPreview=true; webgazer.showPredictionPoints(false); webgazer.applyKalmanFilter(true);
+    await webgazer.setRegression("ridge").setGazeListener(onGaze).begin();
+    S.camTrack = await waitFeed(); S.camReady=true;
+    $("bux-cam").textContent="Camera on ✓"; $("bux-cal-btn").disabled=false; $("bux-start").disabled=false;
+    dot.style.display="block"; setHint("Calibrate for accuracy, then Start.");
+  }catch(e){ $("bux-cam").disabled=false; $("bux-cam").textContent="Enable camera"; alert("Camera failed: "+e.message); }
+};
+
+/* ---------- calibration + validation ---------- */
+$("bux-cal-btn").onclick = startCal;
+function startCal(){
+  cal.style.display="block"; cal.querySelectorAll(".bux-caldot").forEach(d=>d.remove());
+  cal.querySelector(".msg").innerHTML='Click each red dot <b>4 times</b> while looking at it. <small>13 points, then an accuracy check.</small>';
+  const pts=[[10,12],[50,12],[90,12],[30,30],[70,30],[10,50],[50,50],[90,50],[30,70],[70,70],[10,88],[50,88],[90,88]];
+  let remaining=pts.length;
+  pts.forEach(([x,y])=>{ const d=document.createElement("div"); d.className="bux-caldot";
+    d.style.left=x+"vw"; d.style.top=y+"vh"; let c=0; d.textContent="0/4";
+    d.onclick=()=>{ c++; d.textContent=c+"/4"; if(c>=4){ d.classList.add("done"); d.style.pointerEvents="none";
+      if(--remaining===0) setTimeout(validate,300); } };
+    cal.appendChild(d); });
+}
+async function validate(){
+  cal.querySelectorAll(".bux-caldot").forEach(d=>d.remove());
+  cal.querySelector(".msg").innerHTML='<b>Accuracy check</b> — just LOOK at each dot.';
+  const vpts=[[25,25],[75,25],[25,75],[75,75]], errs=[];
+  for(const [vx,vy] of vpts){ const d=document.createElement("div"); d.className="bux-caldot";
+    d.style.left=vx+"vw"; d.style.top=vy+"vh"; d.style.pointerEvents="none"; d.textContent="👁"; cal.appendChild(d);
+    await sleep(700); const tx=vx/100*innerWidth, ty=vy/100*innerHeight, s=[];
+    for(let i=0;i<12;i++){ await sleep(100); if(S.lastGx!=null) s.push(Math.hypot(S.lastGx-tx,S.lastGy-ty)); }
+    if(s.length){ s.sort((a,b)=>a-b); errs.push(s[s.length>>1]); } d.remove(); }
+  cal.style.display="none"; S.calibrated=true;
+  S.accuracyPx = errs.length?Math.round(errs.reduce((a,b)=>a+b,0)/errs.length):null;
+  setHint("Calibrated ✓ accuracy ≈ "+(S.accuracyPx??"?")+"px. Press Start.");
+}
+
+/* ---------- native capture (no snippet — we are the page) ---------- */
+function isClickable(el){ let n=el,d=0; while(n&&n.nodeType===1&&d<6){ if(/^(A|BUTTON|INPUT|SELECT|TEXTAREA|LABEL|SUMMARY|OPTION)$/.test(n.tagName))return true;
+  if(n.getAttribute){ const r=n.getAttribute("role"); if(r&&/^(button|link|tab|checkbox|radio|menuitem|switch|option)$/.test(r))return true;
+    if(n.hasAttribute("onclick")||n.hasAttribute("href"))return true; const ti=n.getAttribute("tabindex"); if(ti!=null&&ti!=="-1")return true; }
+  try{ if(getComputedStyle(n).cursor==="pointer")return true; }catch(e){} n=n.parentElement; d++; } return false; }
+function ev(o){ if(S.recording){ o.t=Math.round(nowRel()); S.events.push(o); } }
+
+document.addEventListener("click",e=>{ if(!S.recording)return; const el=e.target||{}; const clickable=isClickable(el);
+  ev({type:"click",x:e.clientX,y:e.clientY,tag:el.tagName||"",txt:(el.innerText||el.value||"").toString().trim().slice(0,60),clickable,gazeRegion:S.lastRegion||"?"});
+  try{ if(window.webgazer) webgazer.recordScreenPosition(e.clientX,e.clientY,"click"); }catch(_){}
+  const now=performance.now(); S.recentClicks.push({x:e.clientX,y:e.clientY,t:now});
+  S.recentClicks=S.recentClicks.filter(c=>now-c.t<1200);
+  if(S.recentClicks.filter(c=>Math.hypot(c.x-e.clientX,c.y-e.clientY)<40).length>=3){ ev({type:"rage_click",x:e.clientX,y:e.clientY}); S.recentClicks=[]; }
+},true);
+document.addEventListener("mousemove",e=>{ if(!S.recording)return; const now=performance.now(); if(now-S.lastMouse<66)return; S.lastMouse=now; S.mouse.push({t:Math.round(nowRel()),x:e.clientX,y:e.clientY}); },{passive:true,capture:true});
+let lastY=0;
+window.addEventListener("scroll",()=>{ if(!S.recording)return; const y=scrollY||0, dh=Math.max(document.body.scrollHeight,document.documentElement.scrollHeight)-innerHeight, pct=dh>0?Math.min(100,Math.round(y/dh*100)):0;
+  if(pct>S.maxScroll)S.maxScroll=pct; const dir=y>lastY?1:y<lastY?-1:0;
+  if(dir){ if(!S.lastDir)S.dirWinStart=performance.now(); else if(dir!==S.lastDir){ if(performance.now()-S.dirWinStart>2500){S.dirChanges=0;S.dirWinStart=performance.now();} if(++S.dirChanges>=4){ ev({type:"scroll_thrash",pct}); S.dirChanges=0; } } S.lastDir=dir; } lastY=y;
+},{passive:true});
+function announce(){ if(!S.recording)return; const p={type:"page",url:location.href,title:document.title}; ev(p); S.pages.push({url:location.href,title:document.title,startT:Math.round(nowRel()),endT:null}); }
+["pushState","replaceState"].forEach(m=>{ const o=history[m]; history[m]=function(){ const r=o.apply(this,arguments); setTimeout(announce,0); return r; }; });
+addEventListener("popstate",announce);
+document.addEventListener("visibilitychange",()=>{ if(!S.recording)return; if(document.hidden){ ev({type:"tracking_paused"}); } else { ev({type:"tracking_resumed"}); alert("Boring UX: eye tracking paused while the tab was hidden — gaze has a gap."); }});
+
+/* ---------- record ---------- */
+function mime(){ return ["video/webm;codecs=vp9,opus","video/webm;codecs=vp8,opus","video/webm"].find(m=>MediaRecorder.isTypeSupported(m))||""; }
+$("bux-start").onclick = async () => {
+  if(!S.camReady){ alert("Enable camera first"); return; }
+  if(!S.calibrated && !confirm("Gaze not calibrated — accuracy will be poor. OK = record anyway, Cancel = calibrate.")){ startCal(); return; }
+  try{ S.mic = await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true}}); }catch(e){ S.mic=null; }
+  let screen=null;
+  if(confirm("Also record the SCREEN? (OK = pick this tab to share; Cancel = gaze+face+audio only)")){
+    try{ screen = await navigator.mediaDevices.getDisplayMedia({video:{frameRate:15},audio:false}); }catch(e){}
+  }
+  const m=mime(); S.recorders=[]; S.chunks={face:[],audio:[],screen:[]};
+  S.recording=true; S.startWall=Date.now(); S.startPerf=performance.now();
+  S.gaze=[]; S.mouse=[]; S.events=[]; S.pages=[]; S.regionTime={L:0,C:0,R:0}; S.lastGazeT=0; S.lastRegion=null; S.maxScroll=0;
+  const rec=(stream,key,vb)=>{ if(!stream)return; const opts={mimeType:m}; if(vb)opts.videoBitsPerSecond=vb; let r; try{r=new MediaRecorder(stream,opts);}catch(e){r=new MediaRecorder(stream);}
+    r.ondataavailable=e=>e.data.size&&S.chunks[key].push(e.data); r.start(1000); S.recorders.push(r); };
+  if(S.camTrack) rec(new MediaStream([S.camTrack.clone(), ...(S.mic?[S.mic.getAudioTracks()[0].clone()]:[])]),"face",1200000);
+  if(S.mic) rec(S.mic,"audio",0);
+  if(screen){ const sv=screen.getVideoTracks()[0]; sv.addEventListener("ended",()=>S.recording&&stop());
+    rec(new MediaStream([sv,...(S.mic?[S.mic.getAudioTracks()[0].clone()]:[])]),"screen",2500000); }
+  announce();
+  $("bux-start").disabled=true; $("bux-stop").disabled=false; $("bux-status").textContent="REC ●";
+  setHint("Recording… stay on this tab. Press Stop to save.");
+};
+$("bux-stop").onclick = stop;
+async function stop(){
+  if(!S.recording)return; S.recording=false; $("bux-status").textContent="saving…";
+  await Promise.all(S.recorders.map(r=>new Promise(res=>{ if(r.state==="inactive")return res(); r.onstop=res; try{r.stop();}catch(e){res();} })));
+  S.recorders.forEach(r=>r.stream.getTracks().forEach(t=>t.stop()));
+  const p=S.pages[S.pages.length-1]; if(p&&p.endT==null)p.endT=Math.round(nowRel());
+  const stamp=new Date(S.startWall).toISOString().replace(/[:.]/g,"-").slice(0,19);
+  const m=mime();
+  dl(stamp+"/gaze.csv", csv(["t_ms","x","y","h_region","cell"], S.gaze.map(g=>[g.t,g.x,g.y,g.col,g.cell])));
+  dl(stamp+"/mouse.csv", csv(["t_ms","x","y"], S.mouse.map(g=>[g.t,g.x,g.y])));
+  dl(stamp+"/events.csv", csv(["t_ms","type","detail","gazeRegion","extra"], S.events.map(e=>[e.t,e.type,e.txt||e.title||e.note||"",e.gazeRegion||"",e.url||e.pct||""])));
+  dl(stamp+"/session.json", JSON.stringify(summary(),null,2));
+  dl(stamp+"/SESSION-AI.md", aiBundle());
+  if(S.chunks.face.length) dlBlob(stamp+"/face.webm", new Blob(S.chunks.face,{type:m}));
+  if(S.chunks.audio.length) dlBlob(stamp+"/audio.webm", new Blob(S.chunks.audio,{type:"audio/webm"}));
+  if(S.chunks.screen.length) dlBlob(stamp+"/screen.webm", new Blob(S.chunks.screen,{type:m}));
+  $("bux-status").textContent="saved ✓"; $("bux-start").disabled=false; $("bux-stop").disabled=true;
+  setHint("Saved to Downloads/"+stamp+"/ — "+S.gaze.length+" gaze, "+S.events.length+" events.");
+}
+
+/* ---------- outputs ---------- */
+function summary(){ const g=S.regionTime, gt=g.L+g.C+g.R||1;
+  return { tool:"Boring UX extension", site:location.href, startedAt:new Date(S.startWall).toISOString(),
+    durationSec:+(nowRel()/1000).toFixed(2), calibrated:S.calibrated, gazeAccuracyPx:S.accuracyPx,
+    viewport:{stageW:innerWidth,stageH:innerHeight,winW:innerWidth,winH:innerHeight},
+    totals:{pages:S.pages.length,gazeSamples:S.gaze.length,mouseSamples:S.mouse.length,clicks:S.events.filter(e=>e.type==="click").length},
+    gazeDistribution:{left:+(g.L/gt*100).toFixed(1),center:+(g.C/gt*100).toFixed(1),right:+(g.R/gt*100).toFixed(1)},
+    events:S.events }; }
+function aiBundle(){ const sum=summary(); const {events,...meta}=sum;
+  const ts=ms=>{const s=ms/1000;return String(Math.floor(s/60)).padStart(2,"0")+":"+(s%60).toFixed(1).padStart(4,"0");};
+  const L=[];
+  for(const e of S.events){ let l=e.type.toUpperCase();
+    if(e.type==="page")l=`PAGE → ${e.title||e.url}`; else if(e.type==="click")l=`CLICK ${e.clickable===false?"[DEAD] ":""}"${e.txt||e.tag}" gaze=${e.gazeRegion}`;
+    else if(e.type==="rage_click")l="RAGE-CLICK"; else if(e.type==="scroll_thrash")l=`SCROLL-THRASH @${e.pct}%`;
+    else if(e.type==="tracking_paused")l="⚠ EYE-TRACKING PAUSED (tab hidden)"; else if(e.type==="tracking_resumed")l="EYE-TRACKING RESUMED"; L.push([e.t,l]); }
+  let last=-1e9; for(const g of S.gaze){ if(g.t-last>=500){ last=g.t; L.push([g.t,`GAZE ${g.col||"·"} ${g.cell} (${g.x},${g.y})`]); } }
+  last=-1e9; for(const m of S.mouse){ if(m.t-last>=500){ last=m.t; L.push([m.t,`MOUSE (${m.x},${m.y})`]); } }
+  L.sort((a,b)=>a[0]-b[0]);
+  return `# Boring UX — AI-ready session bundle (${location.hostname})
+Captured live on the real site via the Boring UX browser extension.
+
+## Metadata
+\`\`\`json
+${JSON.stringify(meta,null,2)}
+\`\`\`
+Data quality: calibrated=${S.calibrated}${S.accuracyPx!=null?`, gaze accuracy ≈ ${S.accuracyPx}px`:""}. Coordinates are viewport pixels (${innerWidth}×${innerHeight}). Clicks/mouse captured natively.
+
+## Unified timeline (t=0 = start; GAZE & MOUSE @2Hz — full data in the CSVs)
+\`\`\`
+${L.map(([t,l])=>`[${ts(t)}] ${l}`).join("\n")}
+\`\`\`
+
+## To analyze
+Transcribe audio.webm (whisper) → analyze this timeline + transcript (same clock). Produce a graded UX report: attention graphs, feature scorecard, findings, RICE backlog, intent heatmaps.`; }
+
+/* ---------- helpers ---------- */
+function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
+function csv(head,rows){ const esc=v=>{v=(v==null?"":String(v)).replace(/"/g,'""');return /[",\n]/.test(v)?'"'+v+'"':v;};
+  return [head.join(","), ...rows.map(r=>r.map(esc).join(","))].join("\n"); }
+function dl(name,text){ dlBlob(name,new Blob([text],{type:"text/plain"})); }
+function dlBlob(name,blob){ const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=name;
+  document.documentElement.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(a.href),8000); }
+
+setHint("Ready. Enable camera to begin.");
+})();

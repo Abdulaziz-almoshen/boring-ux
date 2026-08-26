@@ -81,6 +81,20 @@ Every saved session folder contains **`SESSION-AI.md`** — a single agent-ready
 
 Either way you get the complete UX report: overall grade, attention graphs, feature-by-feature scorecard, intent heatmaps ("where do users look when confused vs. acting"), findings, a RICE backlog, and a full fused transcript appendix.
 
+## 🧩 Test ANY website (browser extension)
+
+The in-browser recorder only loads sites that allow framing. To eye-track **any site on the web** — including ones that send `X-Frame-Options` — use the bundled **browser extension**. It runs *inside the real page* (like Hotjar/FullStory), so there's no iframe, no header limits, accurate coordinates, and **no `tracker.js` needed** (it sees clicks/mouse natively).
+
+**Install (Chrome/Edge, unpacked):**
+1. `chrome://extensions` → toggle **Developer mode** on
+2. **Load unpacked** → select the `extension/` folder
+3. Go to any website → click the **Boring UX** toolbar icon → a panel appears
+4. **Enable camera → Calibrate (13 dots + accuracy check) → Start** → do the task → **Stop & save**
+
+It downloads a full `session-…/` (gaze.csv, mouse.csv, events.csv, session.json, **SESSION-AI.md**, face/audio/optional screen) — the same AI-ready bundle, from any site. ⚠ Keep the tab in front while recording (eye tracking pauses on hidden tabs; it warns you).
+
+> Note: the extension weakens nothing on the visited site — it only reads gaze/interaction locally and saves to your machine. Removing a site's own security headers via proxies is **not** how this works, by design.
+
 ## What a session folder contains
 
 | File | What it is |

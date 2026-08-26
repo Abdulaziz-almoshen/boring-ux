@@ -93,6 +93,15 @@
     }
   }, true);
 
+  // ---- continuous mouse movement (throttled ~15Hz) ----
+  var lastMouse = 0;
+  document.addEventListener("mousemove", function (e) {
+    var now = performance.now();
+    if (now - lastMouse < 66) return;   // ~15 samples/sec
+    lastMouse = now;
+    send({ type: "mouse", x: e.clientX, y: e.clientY });
+  }, { passive: true, capture: true });
+
   // ---- form fields: focus -> blur = fill time ----
   var isField = function (el) {
     return el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT");

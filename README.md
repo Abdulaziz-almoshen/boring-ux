@@ -56,7 +56,7 @@ Open **http://localhost:8000** in **Chrome**.
 ### Record a session
 1. **📁 Choose save folder** — recordings stream here live (do this for any real session).
 2. Enter your site's URL and **Load** it (your page must include the snippet — see below).
-3. **Enable camera** → **Calibrate** (click the 5 dots) → **● Start**.
+3. **Enable camera** → **Calibrate** (13 dots + an automatic accuracy check — required) → **● Start**.
 4. Let the participant do the task. **■ Stop** when done — everything is saved automatically.
 
 ### Instrument your site (one line)
@@ -70,7 +70,12 @@ Gaze + audio + video work without it; **clicks/pages/field-times need it** (a br
 Click **📤 Open / Replay session** (or open `analyze.html`) → drag your `session-…` folder in → press **Play** to watch the eyes + audio + video → **📊 Generate analysis report** → **🖨 Print / Save PDF**.
 
 ### Get the *full* AI report
-Every saved session folder contains **`ANALYZE-PROMPT.md`**. Transcribe the audio (one local command, in the file), then paste the prompt + files into Claude or ChatGPT — you get a complete UX report: overall grade, attention graphs, feature-by-feature scorecard, intent heatmaps ("where do users look when confused vs. acting"), findings, a RICE backlog, and a full fused transcript appendix.
+Every saved session folder contains **`SESSION-AI.md`** — a single agent-ready file with the session metadata, data-quality/accuracy notes, and a **unified timeline** merging gaze + mouse + clicks + pages on one clock — plus **`ANALYZE-PROMPT.md`** (the analysis instructions). Two ways to use them:
+
+- **Paste into Claude / ChatGPT:** transcribe the audio (one local command, inside the file), then hand over `SESSION-AI.md` + the transcript.
+- **Run the bundled skill:** the repo ships a Claude Code skill (`.claude/skills/boring-ux-report`) — open Claude Code in the repo and say *"analyze session-…"*, and it transcribes, fuses, and writes `report.html` + `report.pdf` into the session folder.
+
+Either way you get the complete UX report: overall grade, attention graphs, feature-by-feature scorecard, intent heatmaps ("where do users look when confused vs. acting"), findings, a RICE backlog, and a full fused transcript appendix.
 
 ## What a session folder contains
 
@@ -80,15 +85,17 @@ Every saved session folder contains **`ANALYZE-PROMPT.md`**. Transcribe the audi
 | `face.webm` | webcam face + voice |
 | `audio.webm` | audio only |
 | `gaze.csv` | every gaze sample: `t_ms, screen/page x/y, region (L/C/R), cell (3×3)` |
+| `mouse.csv` | continuous cursor path (~15 Hz) |
+| `SESSION-AI.md` | **one agent-ready file**: metadata + accuracy + unified gaze/mouse/event timeline |
 | `events.csv` | pages, clicks (+ gaze region), field fill-times, dead/rage/scroll signals |
 | `session.json` | duration, viewport, gaze distribution, signals |
 | `ANALYZE-PROMPT.md` | the AI prompt to generate the full report |
 
 ## Honest limitations
 
-- **Webcam gaze is region-accurate, not pixel-perfect** (~50–150px even after calibration). Great for left/center/right and heatmaps; not for telling two adjacent buttons apart. Hardware trackers exist for that.
-- **Calibrate every session** — uncalibrated gaze drifts; the report flags it as directional.
-- **Clicks need the snippet.** Mouse *movement* isn't captured yet (only clicks).
+- **Webcam gaze is region-accurate, not pixel-perfect** (~50–150px). The recorder now fights this three ways: a required **13-point calibration**, a **validation pass that measures your real accuracy in px** (saved into `session.json` as `gazeAccuracyPx` so reports can weight the data), and **continuous recalibration from every in-page click** during the session. Still: great for regions and heatmaps, not for telling two adjacent buttons apart — hardware trackers exist for that.
+- **Calibrate every session** — the recorder warns you before starting uncalibrated; the measured accuracy score tells you when to redo it (aim for <140px).
+- **Clicks + mouse movement need the snippet** (`tracker.js`) on the tested site.
 - The in-browser report is **quantitative**; the *spoken* analysis needs a transcription step (Whisper, one command — local & private).
 
 ## How it works

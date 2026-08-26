@@ -217,6 +217,7 @@ function loadWebgazer(){
 /* ============================ State ============================ */
 const S={
   camReady:false, calibrated:false, recording:false,
+  accuracyPx:null, lastGx:null, lastGy:null, mouse:[],
   micStream:null, camVideoTrack:null,
   recorders:[], chunks:{screen:[],face:[],audio:[]},
   blobs:{}, startWall:0, startPerf:0,
@@ -312,6 +313,7 @@ function getLiveFaceTrack(){
 function onGaze(data){
   if(!data) return;
   const gx=data.x, gy=data.y;
+  S.lastGx=gx; S.lastGy=gy;                      // kept for calibration validation
   $("gazeDot").style.left=gx+"px"; $("gazeDot").style.top=gy+"px";
   const rect=$("stageWrap").getBoundingClientRect();
   let col=null,row=null,region="outside",sx=null,sy=null;
@@ -393,18 +395,45 @@ $("calBtn").onclick=startCalibration;
 function startCalibration(){
   const cal=$("cal"); cal.style.display="block";
   cal.querySelectorAll(".caldot").forEach(d=>d.remove());
-  const pts=[[10,15],[50,15],[90,15],[10,50],[50,50],[90,50],[10,85],[50,85],[90,85]];
+  cal.querySelector(".msg").innerHTML='Click each red dot <b>4 times</b> while looking at it. <br><small>13 points, then a short accuracy check. This trains the gaze model against your clicks.</small>';
+  // 13-point grid: 3x3 + mid-edge points = better coverage at the edges where webcam gaze drifts most
+  const pts=[[10,12],[50,12],[90,12],[30,30],[70,30],[10,50],[50,50],[90,50],[30,70],[70,70],[10,88],[50,88],[90,88]];
   let remaining=pts.length;
   pts.forEach(([x,y])=>{
     const d=document.createElement("div");
-    d.className="caldot"; d.style.left=x+"vw"; d.style.top=y+"vh"; let c=0; d.textContent="0/5";
-    d.onclick=()=>{ c++; d.textContent=c+"/5";
-      if(c>=5){ d.classList.add("done"); d.style.pointerEvents="none";
-        if(--remaining===0){ setTimeout(()=>{cal.style.display="none";
-          S.calibrated=true; toast("Calibration done ✓"); logLine("system","calibration complete"); },400); } }
+    d.className="caldot"; d.style.left=x+"vw"; d.style.top=y+"vh"; let c=0; d.textContent="0/4";
+    d.onclick=()=>{ c++; d.textContent=c+"/4";
+      if(c>=4){ d.classList.add("done"); d.style.pointerEvents="none";
+        if(--remaining===0){ setTimeout(runValidation,300); } }
     };
     cal.appendChild(d);
   });
+}
+// Validation: look at 4 dots, measure real prediction error in px → accuracy score saved with the session
+async function runValidation(){
+  const cal=$("cal");
+  cal.querySelectorAll(".caldot").forEach(d=>d.remove());
+  cal.querySelector(".msg").innerHTML='<b>Accuracy check</b> — just LOOK at each dot (no clicking).';
+  const vpts=[[25,25],[75,25],[25,75],[75,75]];
+  const errs=[];
+  for(const [vx,vy] of vpts){
+    const d=document.createElement("div");
+    d.className="caldot"; d.style.left=vx+"vw"; d.style.top=vy+"vh"; d.style.pointerEvents="none"; d.textContent="👁";
+    cal.appendChild(d);
+    await sleep(700);                                  // settle
+    const tx=vx/100*innerWidth, ty=vy/100*innerHeight;
+    const samples=[];
+    for(let i=0;i<12;i++){ await sleep(100);
+      if(S.lastGx!=null) samples.push(Math.hypot(S.lastGx-tx, S.lastGy-ty)); }
+    if(samples.length){ samples.sort((a,b)=>a-b); errs.push(samples[Math.floor(samples.length/2)]); } // median
+    d.remove();
+  }
+  cal.style.display="none";
+  S.calibrated=true;
+  S.accuracyPx=errs.length?Math.round(errs.reduce((a,b)=>a+b,0)/errs.length):null;
+  const q=S.accuracyPx==null?"?":S.accuracyPx<80?"excellent":S.accuracyPx<140?"good":S.accuracyPx<220?"fair — consider recalibrating":"poor — recalibrate (check lighting, sit still)";
+  toast("Calibration done ✓ accuracy ≈ "+(S.accuracyPx??"?")+"px ("+q+")",6000);
+  logLine("system","calibration complete · measured accuracy ≈ "+(S.accuracyPx??"?")+"px ("+q+")");
 }
 
 /* ============================ Events from the page (tracker.js) ============================ */
@@ -424,11 +453,20 @@ window.addEventListener("message",ev=>{
     }
     $("pageTitle").textContent=d.title||d.url;
     logLine("pg","page ▸ "+(d.title||d.url));
+  }else if(d.type==="mouse"){
+    if(S.recording) S.mouse.push({t:Math.round(t),x:d.x,y:d.y});
+    return; // high-frequency: not logged, not stored in events
   }else if(d.type==="click"){
     const dead=(d.clickable===false);
     if(S.recording){ S.clicks++; $("clickCount").textContent=S.clicks;
       e.gazeRegion=S.lastRegion||"?";
       if(dead){ S.deadClicks++; $("deadCount").textContent=S.deadClicks; } }
+    // continuous recalibration: people look where they click — feed every in-page click
+    // back into the gaze model (converted from iframe coords to window coords)
+    try{ if(window.webgazer && S.camReady && typeof d.x==="number"){
+      const r=$("stage").getBoundingClientRect();
+      webgazer.recordScreenPosition(r.left+d.x, r.top+d.y, "click");
+    }}catch(err){}
     logLine(dead?"mk":"ck","click ▸ "+(d.txt||d.tag||"(empty)")+" ["+(S.lastRegion||"?")+"]"+(dead?" · DEAD — not clickable":""));
   }else if(d.type==="rage_click"){
     if(S.recording){ S.rageClicks++; $("rageCount").textContent=S.rageClicks; }
@@ -507,6 +545,9 @@ async function chooseFolder(){
 
 async function startSession(){
   if(!S.camReady){toast("Enable the camera first");return;}
+  if(!S.calibrated){
+    if(!confirm("⚠ Gaze is NOT calibrated — eye-tracking accuracy will be poor.\n\nCancel = calibrate first (recommended, ~40s)\nOK = record anyway")){ startCalibration(); return; }
+  }
   S.diskMode=!!S.rootDir;
   try{
     // mic audio
@@ -524,7 +565,7 @@ async function startSession(){
     S.recording=true; S.startWall=Date.now(); S.startPerf=performance.now();
     S.gaze=[]; S.events=[]; S.pages=[]; S.clicks=0; S.fields=0;
     S.deadClicks=0; S.rageClicks=0; S.thrash=0; S.maxScroll=0;
-    S.regionTime={L:0,C:0,R:0}; S.lastGazeT=0; S.lastRegion=null;
+    S.regionTime={L:0,C:0,R:0}; S.lastGazeT=0; S.lastRegion=null; S.mouse=[];
     const _sr=$("stageWrap").getBoundingClientRect();       // stage size -> lets the viewer place the gaze dot
     S.stageW=Math.round(_sr.width); S.stageH=Math.round(_sr.height);
 
@@ -621,6 +662,8 @@ async function stopSession(){
       await writeText(S.sessionDir,"session.json",JSON.stringify(buildSummary(),null,2));
       await writeText(S.sessionDir,"events.csv",toEventsCSV());
       await writeText(S.sessionDir,"gaze.csv",toGazeCSV());
+      await writeText(S.sessionDir,"mouse.csv",toMouseCSV());
+      await writeText(S.sessionDir,"SESSION-AI.md",buildAIBundle());      // one AI-agent-ready file with the whole session
       await writeText(S.sessionDir,"ANALYZE-PROMPT.md",ANALYZE_PROMPT);   // drop the AI-report prompt beside the data
     }catch(e){ console.error(e); }
     const mb=k=>res[k]?(res[k].bytes/1048576).toFixed(1)+"MB":"—";
@@ -658,6 +701,9 @@ async function saveSession(){
     ["session.json", new Blob([JSON.stringify(summary,null,2)],{type:"application/json"})],
     ["events.csv",   new Blob([toEventsCSV()],{type:"text/csv"})],
     ["gaze.csv",     new Blob([toGazeCSV()],{type:"text/csv"})],
+    ["mouse.csv",    new Blob([toMouseCSV()],{type:"text/csv"})],
+    ["SESSION-AI.md",new Blob([buildAIBundle()],{type:"text/markdown"})],
+    ["ANALYZE-PROMPT.md",new Blob([ANALYZE_PROMPT],{type:"text/markdown"})],
   ];
   if(S.blobs.screen) files.push(["screen.webm",S.blobs.screen]);
   if(S.blobs.face)   files.push(["face.webm",S.blobs.face]);
@@ -702,8 +748,9 @@ function buildSummary(){
     startedAt:new Date(S.startWall).toISOString(),
     durationSec:+(nowRel()/1000).toFixed(2),
     calibrated:S.calibrated,
+    gazeAccuracyPx:S.accuracyPx,
     viewport:{stageW:S.stageW||0,stageH:S.stageH||0,winW:window.innerWidth,winH:window.innerHeight},
-    totals:{pages:S.pages.length,clicks:S.clicks,fieldsFilled:S.fields,gazeSamples:S.gaze.length},
+    totals:{pages:S.pages.length,clicks:S.clicks,fieldsFilled:S.fields,gazeSamples:S.gaze.length,mouseSamples:S.mouse.length},
     signals:{deadClicks:S.deadClicks,rageClicks:S.rageClicks,scrollThrash:S.thrash,maxScrollPct:S.maxScroll},
     gazeDistribution:{left:+(g.L/gt*100).toFixed(1),center:+(g.C/gt*100).toFixed(1),right:+(g.R/gt*100).toFixed(1)},
     pages,
@@ -729,6 +776,65 @@ function toGazeCSV(){
   const rows=[["t_ms","screen_x","screen_y","page_x","page_y","h_region","cell"]];
   S.gaze.forEach(s=>rows.push([s.t,s.gx,s.gy,s.sx,s.sy,s.col,s.region]));
   return rows.map(r=>r.join(",")).join("\n");
+}
+function toMouseCSV(){
+  const rows=[["t_ms","page_x","page_y"]];
+  S.mouse.forEach(m=>rows.push([m.t,m.x,m.y]));
+  return rows.map(r=>r.join(",")).join("\n");
+}
+
+/* ============================ AI bundle: one agent-ready file for the whole session ============================ */
+function buildAIBundle(){
+  const sum=buildSummary(); const {events,...meta}=sum;
+  const ts=ms=>{const s=ms/1000;return String(Math.floor(s/60)).padStart(2,"0")+":"+(s%60).toFixed(1).padStart(4,"0");};
+  // unified chronological timeline: all events + gaze @2Hz + mouse @2Hz
+  const lines=[];
+  for(const e of S.events){
+    let l="";
+    if(e.type==="page") l=`PAGE  → ${e.title||e.url||""} (${e.url||""})`;
+    else if(e.type==="click") l=`CLICK ${e.clickable===false?"[DEAD] ":""}"${e.txt||e.tag||""}" @(${e.x??"?"},${e.y??"?"}) gaze=${e.gazeRegion||"?"}`;
+    else if(e.type==="rage_click") l=`RAGE-CLICK ×${e.count} @(${e.x},${e.y})`;
+    else if(e.type==="scroll_thrash") l=`SCROLL-THRASH ×${e.count} @${e.pct}%`;
+    else if(e.type==="scroll") continue;
+    else if(e.type==="field_focus") l=`FIELD-FOCUS ${e.field}`;
+    else if(e.type==="field_blur") l=`FIELD-DONE ${e.field} fill=${((e.fillMs||0)/1000).toFixed(1)}s`;
+    else if(e.type==="submit") l=`SUBMIT ${e.form||""}`;
+    else if(e.type==="marker") l=`MARKER "${e.note||""}"`;
+    else l=e.type.toUpperCase();
+    lines.push([e.t,l]);
+  }
+  let last=-1e9;
+  for(const g of S.gaze){ if(g.t-last>=500){ last=g.t;
+    lines.push([g.t,`GAZE  ${g.col||"·"} ${g.region||"off"} ${g.sx!==""&&g.sx!=null?`(${g.sx},${g.sy})`:"(off-page)"}`]); } }
+  last=-1e9;
+  for(const m of S.mouse){ if(m.t-last>=500){ last=m.t; lines.push([m.t,`MOUSE (${m.x},${m.y})`]); } }
+  lines.sort((a,b)=>a[0]-b[0]);
+  return `# Boring UX — AI-ready session bundle
+Everything an AI agent needs to analyze this usability session, in one file. Standalone data files sit alongside it in this folder.
+
+## Metadata
+\`\`\`json
+${JSON.stringify(meta,null,2)}
+\`\`\`
+Data quality: calibrated=${S.calibrated}${S.accuracyPx!=null?`, measured gaze accuracy ≈ ${S.accuracyPx}px (median validation error)`:", accuracy not measured"}. Gaze positions closer than the accuracy radius should be treated as directional. ${S.events.some(e=>e.type==="click")?"Clicks/pages captured via tracker snippet.":"NOTE: no click/page events — the tested site did not include tracker.js."}
+
+## Files in this folder
+- audio.webm — participant voice (transcribe with whisper: \`ffmpeg -i audio.webm -ar 16000 -ac 1 a.wav && whisper-cli -m ggml-large-v3-turbo.bin -f a.wav -l auto -osrt -of transcript\`)
+- screen.webm / face.webm — recordings · gaze.csv — every gaze sample · mouse.csv — cursor path · events.csv — full event stream · session.json — metadata
+
+## Coordinate space
+page_x/page_y are pixels on the tested page, viewport ${sum.viewport.stageW}×${sum.viewport.stageH}. Regions: L/C/R = horizontal thirds; cells = 3×3 grid TL…BR.
+
+## Unified timeline (t=0 = recording start; GAZE & MOUSE downsampled to 2Hz — full resolution in the CSVs)
+\`\`\`
+${lines.map(([t,l])=>`[${ts(t)}] ${l}`).join("\n")}
+\`\`\`
+
+## Transcript
+Not embedded (audio must be transcribed first — command above). After transcribing, analyze transcript.srt alongside this timeline: timestamps share the same clock.
+
+---
+${ANALYZE_PROMPT}`;
 }
 
 /* ============================ helpers ============================ */

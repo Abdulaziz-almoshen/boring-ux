@@ -109,6 +109,7 @@
   </div>
   <div id="genRow" style="margin-top:16px;text-align:center">
     <button class="primary" id="genBtn">📊 Generate analysis report</button>
+    <button id="aiBtn">🧾 Export AI bundle (SESSION-AI.md)</button>
     <button id="printBtn" style="display:none">🖨 Print / Save PDF</button>
     <div class="hint" style="margin-top:6px">Builds the quantitative report (gaze, heatmap, timing, frustration) from the data. Transcript-based sections need speech-to-text and aren't generated here.</div>
   </div>
@@ -119,12 +120,13 @@
 <script>
 const $=id=>document.getElementById(id);
 const A=$("audio"),SCR=$("screen"),FACE=$("face");
-let files={}, gaze=[], events=[], sess=null, dur=0, urls=[], playing=false, raf=0, heatCtx=null, cumArr=[];
+let files={}, gaze=[], events=[], mouse=[], sess=null, dur=0, urls=[], playing=false, raf=0, heatCtx=null, cumArr=[];
 
 /* ---------- file intake ---------- */
 function classify(name){
   const n=name.toLowerCase();
   if(n.includes('gaze')&&n.endsWith('.csv')) return 'gaze';
+  if(n.includes('mouse')&&n.endsWith('.csv')) return 'mouse';
   if(n.includes('event')&&n.endsWith('.csv')) return 'events';
   if(n.endsWith('.json')) return 'session';
   if((n.includes('audio')||n.endsWith('.mp3')||n.endsWith('.m4a')||n.endsWith('.wav'))&&!n.includes('screen')&&!n.includes('face')) return 'audio';
@@ -172,6 +174,11 @@ async function load(){
   if(files.gaze) gaze=parseGaze(await files.gaze.text());
   if(files.session) try{sess=JSON.parse(await files.session.text());}catch(e){sess=null;}
   if(files.events) try{events=parseEvents(await files.events.text());}catch(e){events=[];}
+  mouse=[];
+  if(files.mouse) try{
+    const L=(await files.mouse.text()).trim().split(/\r?\n/); L.shift();
+    for(const ln of L){const c=ln.split(",");if(c.length>=3)mouse.push({t:+c[0],x:+c[1],y:+c[2]});}
+  }catch(e){}
   dur = (sess&&sess.durationSec) || (gaze.length?gaze[gaze.length-1].t/1000:0) || 0;
   // media
   if(files.audio){A.src=objURL(files.audio);}else A.removeAttribute('src');
@@ -286,5 +293,42 @@ function genReport(){
   $("report").scrollIntoView({behavior:'smooth'});
 }
 function esc(s){return (s||"").replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+
+/* ---------- AI bundle export (from uploaded files) ---------- */
+$("aiBtn").onclick=()=>{
+  if(!gaze.length&&!events.length){alert("Upload at least gaze.csv or events.csv first.");return;}
+  const ts=ms=>{const s=ms/1000;return String(Math.floor(s/60)).padStart(2,"0")+":"+(s%60).toFixed(1).padStart(4,"0");};
+  const lines=[];
+  for(const e of events){
+    if(e.type==="scroll")continue;
+    lines.push([e.t,`${(e.type||"event").toUpperCase().replace("_","-")} ${e.detail||""} ${e.gaze?`gaze=${e.gaze}`:""} ${e.extra||""}`.trim()]);
+  }
+  let lastT=-1e9;
+  for(const g of gaze){ if(g.t-lastT>=500){ lastT=g.t;
+    lines.push([g.t,`GAZE  ${g.col||"·"} ${g.cell||"off"} ${g.x!=null?`(${g.x},${g.y})`:"(off-page)"}`]); } }
+  lastT=-1e9;
+  for(const m of mouse){ if(m.t-lastT>=500){ lastT=m.t; lines.push([m.t,`MOUSE (${m.x},${m.y})`]); } }
+  lines.sort((a,b)=>a[0]-b[0]);
+  const meta=sess?{...sess}:{}; delete meta.events;
+  const md=`# Boring UX — AI-ready session bundle
+Everything an AI agent needs to analyze this usability session, in one file.
+
+## Metadata
+\`\`\`json
+${JSON.stringify(meta,null,2)}
+\`\`\`
+Data quality: calibrated=${sess?!!sess.calibrated:"unknown"}${sess&&sess.gazeAccuracyPx!=null?`, measured gaze accuracy ≈ ${sess.gazeAccuracyPx}px`:""}. ${events.length?"Clicks/pages captured.":"NOTE: no click/page events — tested site had no tracker.js."}
+
+## Unified timeline (t=0 = recording start; GAZE & MOUSE downsampled to 2Hz — full resolution in the CSVs)
+\`\`\`
+${lines.map(([t,l])=>`[${ts(t)}] ${l}`).join("\n")}
+\`\`\`
+
+## Transcript
+Transcribe audio.webm (whisper) and analyze transcript.srt alongside this timeline — same clock.
+`;
+  const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([md],{type:"text/markdown"}));
+  a.download="SESSION-AI.md";document.body.appendChild(a);a.click();a.remove();
+};
 </script>
 </body></html>

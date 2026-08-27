@@ -208,20 +208,29 @@ async function stop(){
   const host=(location.hostname||"site").replace(/[^a-z0-9.-]/gi,"_");
   const folder=`boring-ux/${host}-${stamp}`;
   const m=mime();
-  await dl(folder+"/gaze.csv", csv(["t_ms","x","y","h_region","cell"], S.gaze.map(g=>[g.t,g.x,g.y,g.col,g.cell])));
-  await dl(folder+"/mouse.csv", csv(["t_ms","x","y"], S.mouse.map(g=>[g.t,g.x,g.y])));
-  await dl(folder+"/events.csv", csv(["t_ms","type","detail","gazeRegion","extra"], S.events.map(e=>[e.t,e.type,e.txt||e.title||e.note||"",e.gazeRegion||"",e.url||e.pct||""])));
-  await dl(folder+"/session.json", JSON.stringify(summary(),null,2));
-  await dl(folder+"/SESSION-AI.md", aiBundle());
-  if(S.chunks.face.length) await dlBlob(folder+"/face.webm", new Blob(S.chunks.face,{type:m}));
-  if(S.chunks.audio.length) await dlBlob(folder+"/audio.webm", new Blob(S.chunks.audio,{type:"audio/webm"}));
-  if(S.chunks.screen.length) await dlBlob(folder+"/screen.webm", new Blob(S.chunks.screen,{type:m}));
+  const results=[];
+  results.push(await dl(folder+"/gaze.csv", csv(["t_ms","x","y","h_region","cell"], S.gaze.map(g=>[g.t,g.x,g.y,g.col,g.cell]))));
+  results.push(await dl(folder+"/mouse.csv", csv(["t_ms","x","y"], S.mouse.map(g=>[g.t,g.x,g.y]))));
+  results.push(await dl(folder+"/events.csv", csv(["t_ms","type","detail","gazeRegion","extra"], S.events.map(e=>[e.t,e.type,e.txt||e.title||e.note||"",e.gazeRegion||"",e.url||e.pct||""]))));
+  results.push(await dl(folder+"/session.json", JSON.stringify(summary(),null,2)));
+  results.push(await dl(folder+"/SESSION-AI.md", aiBundle()));
+  if(S.chunks.face.length) results.push(await dlBlob(folder+"/face.webm", new Blob(S.chunks.face,{type:m})));
+  if(S.chunks.audio.length) results.push(await dlBlob(folder+"/audio.webm", new Blob(S.chunks.audio,{type:"audio/webm"})));
+  if(S.chunks.screen.length) results.push(await dlBlob(folder+"/screen.webm", new Blob(S.chunks.screen,{type:m})));
   S.chunks={face:[],audio:[],screen:[]};
   // 4) reset the panel to the initial state (must Enable camera again for a new session)
   $("bux-cam").disabled=false; $("bux-cam").textContent="Enable camera";
   $("bux-cal-btn").disabled=true; $("bux-cam-view").disabled=true; $("bux-start").disabled=true; $("bux-stop").disabled=true;
   $("bux-status").textContent="saved ✓ · idle"; $("bux-region").textContent="—";
-  setHint("Saved to Downloads/"+folder+"/ ("+S.gaze.length+" gaze, "+S.events.length+" events). Camera off. Enable camera for a new session.");
+  // 5) HONEST result: did the files really go into one folder, or did we fall back to loose files?
+  const failed=results.filter(r=>r&&!r.ok);
+  if(failed.length===0){
+    setHint("✅ Saved as ONE folder → Downloads/"+folder+"/ ("+S.gaze.length+" gaze, "+S.events.length+" events). Camera off. Enable camera for a new session.");
+  }else{
+    const reason=failed[0].err||"unknown";
+    const needsReload=/receiving end|establish connection|no response/i.test(reason);
+    setHint("⚠ Saved as LOOSE files (couldn't make a folder). "+(needsReload?"Fix: reload the extension at chrome://extensions, then run again.":"Reason: "+reason)+" Camera off.");
+  }
 }
 addEventListener("beforeunload",()=>{ if(S.recording){ try{ S.recorders.forEach(r=>r.state!=="inactive"&&r.stop()); }catch(e){} } killCamera(); });
 
@@ -233,6 +242,70 @@ function summary(){ const g=S.regionTime, gt=g.L+g.C+g.R||1;
     totals:{pages:S.pages.length,gazeSamples:S.gaze.length,mouseSamples:S.mouse.length,clicks:S.events.filter(e=>e.type==="click").length},
     gazeDistribution:{left:+(g.L/gt*100).toFixed(1),center:+(g.C/gt*100).toFixed(1),right:+(g.R/gt*100).toFixed(1)},
     events:S.events }; }
+// The FULL analysis brief, embedded so SESSION-AI.md is one self-contained file:
+// data + exactly how to turn it into the graded report/dashboard. No other file needed.
+const ANALYZE_INSTRUCTIONS = `## ▶ How to turn this session into the full UX report
+
+Give an AI agent (Claude/ChatGPT, or Claude Code in this folder) **this file** plus the other
+files in this same folder (audio.webm, gaze.csv, mouse.csv, events.csv, session.json). Then:
+
+**Role:** You are a senior UX researcher + product manager. I ran a moderated, think-aloud
+usability test with webcam eye-tracking. Analyze this session and produce ONE self-contained,
+print-to-PDF HTML report. Be honest: webcam gaze is directional within the measured accuracy
+radius (see gazeAccuracyPx); n=1 unless more sessions were combined; if events.csv is empty, say so.
+
+### Step 1 — Transcribe the think-aloud audio (100% local, private)
+\`\`\`bash
+brew install whisper-cpp ffmpeg
+ffmpeg -i audio.webm -ar 16000 -ac 1 audio.wav
+whisper-cli -m ggml-large-v3-turbo.bin -f audio.wav -l auto -osrt -otxt -of transcript
+\`\`\`
+Collapse repeated identical lines (silence hallucinations). Keep the original language and add an English translation for every quote.
+
+### Step 2 — Fuse everything on one clock (t=0 = recording start)
+The timeline above, gaze.csv, events.csv and transcript.srt share the same clock. For every spoken
+segment compute the dominant gaze region (L/C/R) + 3×3 cell + on-screen % during it. Tie every
+finding to THREE signals: what they said + where the eyes were that second + how long it took.
+Classify each segment's intent (taking-action / seeking-data / confused-searching) and pool gaze per
+intent into a 3×3 grid. Compute: L/C/R dwell, 3×3 heatmap, attention-over-time, engagement (on-screen %),
+scanning intensity (region-switches/min), fixations (>1s = deep), silent-gap latency (pauses ≥4s + what
+the eyes did), per-page time and per-field fill-time (events.csv), and frustration signals.
+
+### Step 3 — Produce the report / dashboard with EXACTLY these sections
+1. Title + product name.
+2. Overall grade /10 with sub-scores (AI, visual design, data clarity, delight, task efficiency, actionability, discoverability) + one-line verdict.
+3. Executive summary (dark card): fix-first (P0), fix-next (P1), keep (delighters).
+4. Method & confidence — state gazeAccuracyPx; flag uncalibrated gaze as directional; flag empty events.csv.
+5. Journey map per session: stage · time · emotion (emoji) · gaze/behaviour · opportunity.
+6. Attention analytics — GRAPHED as inline SVG: gaze-region ribbon (orange=L, blue=C, green=R, grey=away) + engagement line + searching-intensity line + feature-phase bar. This is the dashboard.
+7. Feature-by-feature scorecard (table): feature · time · gaze L/C/R bar · on-screen % · search/min · signal (Delight/Friction/Confusion/Request) · friction index 0–100 · recommendation.
+8. Attention×friction matrix + prioritised roadmap.
+9. Detailed findings P0→P1→Keep→P2 — each: original-language quote + English + 👁 eyes-at-that-moment + ⏱ timing + recommendation.
+10. Latency & timing table (silent gaps, what the eyes did, meaning).
+11. RICE backlog (ticket-ready).
+12. Conclusion — where the eyes go by intent: three 3×3 heatmaps (action / data / confused) + a "where to place actions, data, filters" table.
+13. Appendix: the complete fused timeline, every segment verbatim, with gaze region/cell, on-screen %, and the latency gap before it. Nothing summarised.
+
+### Design (inline <style>, no external assets)
+System sans-serif; max-width ~960px. text #1a2233, muted #6b7488, borders #e6eaf2; P0 #d33, P1 #e8871e,
+accent #4f8cff, delight #0a9d54. Original-language quotes in a green-left-border box (direction:rtl for
+Arabic) with English italic beneath. 👁 callouts in a light-blue box. Table headers #f0f3f9. @media print{} for clean PDF.
+
+### Example finding (match this shape)
+> **P0 · "New Leave" is invisible.** 〔quote, original〕 "كيف أضيف إجازة جديدة؟ أنا ما أدري" — _"How do I add a new leave? I don't know."_
+> 👁 Eyes scanning top-right→left, 30% off-screen, never settled for ~8 min. ⏱ First click at 0:27, task not started until 8:00.
+> **Recommendation:** a high-contrast, text-labelled "＋ New Leave" button, fixed top-right, on Home and the list. **RICE 60.**
+
+### RICE backlog format (one row per recommendation)
+| # | Ticket | Reach(1–10) | Impact(0.25–3) | Confidence(0.5–1) | Effort(person-months) | RICE = R×I×C÷E | Ship (Now/Next/Later) |
+
+### Step 4 — Save
+Write report.html in this folder, then render a PDF:
+\`\`\`bash
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless --disable-gpu --no-pdf-header-footer --print-to-pdf=report.pdf report.html
+\`\`\`
+Never invent quotes or events not present in the data.`;
+
 function aiBundle(){ const sum=summary(); const {events,...meta}=sum;
   const ts=ms=>{const s=ms/1000;return String(Math.floor(s/60)).padStart(2,"0")+":"+(s%60).toFixed(1).padStart(4,"0");};
   const L=[];
@@ -257,27 +330,38 @@ Data quality: calibrated=${S.calibrated}${S.accuracyPx!=null?`, gaze accuracy �
 ${L.map(([t,l])=>`[${ts(t)}] ${l}`).join("\n")}
 \`\`\`
 
-## To analyze
-Transcribe audio.webm (whisper) → analyze this timeline + transcript (same clock). Produce a graded UX report: attention graphs, feature scorecard, findings, RICE backlog, intent heatmaps.`; }
+${ANALYZE_INSTRUCTIONS}`; }
 
 /* ---------- helpers ---------- */
 function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
 function csv(head,rows){ const esc=v=>{v=(v==null?"":String(v)).replace(/"/g,'""');return /[",\n]/.test(v)?'"'+v+'"':v;};
   return [head.join(","), ...rows.map(r=>r.map(esc).join(","))].join("\n"); }
 function toDataURL(blob){ return new Promise((res,rej)=>{ const fr=new FileReader(); fr.onload=()=>res(fr.result); fr.onerror=rej; fr.readAsDataURL(blob); }); }
-// Save via chrome.downloads (through the background) so files land in a REAL subfolder.
-// Falls back to a flat <a download> only if the messaging download fails.
+// Save via chrome.downloads (through the background) so files land in a REAL subfolder
+// (chrome.downloads honors "folder/file"; the <a download> attribute flattens "/" to "_").
+// Returns {ok, err} — ok:true means it went into the real folder. On failure we fall back
+// to a flat <a download> so no data is ever lost, and report WHY so the panel can tell the user.
 async function save(name, blob){
+  let err=null;
   try{
-    const dataUrl = await toDataURL(blob);
+    let dataUrl = await toDataURL(blob);
+    // Force the MIME to octet-stream so Chrome keeps the EXACT filename+extension we pass
+    // (a text/plain data URL makes chrome.downloads rewrite .csv/.json/.md → .txt).
+    dataUrl = dataUrl.replace(/^data:[^;,]*/, "data:application/octet-stream");
     const resp = await chrome.runtime.sendMessage({ bux:"download", filename:name, dataUrl });
-    if(resp && resp.ok) return true;
-    throw new Error(resp && resp.err || "download failed");
+    if(resp && resp.ok) return { ok:true };
+    err = (resp && resp.err) || "no response from extension background";
   }catch(e){
+    // Most common cause: the extension wasn't reloaded, so the new background listener
+    // doesn't exist yet ("Could not establish connection. Receiving end does not exist.").
+    err = (e && e.message) || String(e);
+  }
+  console.warn("[BoringUX] folder save failed for", name, "→ falling back to loose file. Reason:", err);
+  try{
     const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=name.split("/").pop();
     document.documentElement.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(a.href),8000);
-    return false;
-  }
+  }catch(e2){ err = err+" | fallback also failed: "+((e2&&e2.message)||e2); }
+  return { ok:false, err };
 }
 function dl(name,text){ return save(name,new Blob([text],{type:"text/plain"})); }
 function dlBlob(name,blob){ return save(name,blob); }

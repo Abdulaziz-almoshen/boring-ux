@@ -52,6 +52,20 @@ chrome.action.onClicked.addListener(async (tab) => {
   chrome.tabs.reload(tab.id);
 });
 
+// Save a file into a real subfolder of Downloads (chrome.downloads honors subdirectories;
+// the <a download> path attribute does not — it flattens "/" to "_").
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg && msg.bux === "download") {
+    try {
+      chrome.downloads.download(
+        { url: msg.dataUrl, filename: msg.filename, conflictAction: "uniquify", saveAs: false },
+        (id) => { const e = chrome.runtime.lastError; sendResponse({ ok: !e && id != null, err: e && e.message }); }
+      );
+    } catch (e) { sendResponse({ ok: false, err: String(e) }); }
+    return true; // async response
+  }
+});
+
 chrome.tabs.onUpdated.addListener(async (tabId, info) => {
   if (info.status !== "complete") return;
   const key = "autoinject:"+tabId;

@@ -177,28 +177,53 @@ $("bux-start").onclick = async () => {
   if(screen){ const sv=screen.getVideoTracks()[0]; sv.addEventListener("ended",()=>S.recording&&stop());
     rec(new MediaStream([sv,...(S.mic?[S.mic.getAudioTracks()[0].clone()]:[])]),"screen",2500000); }
   announce();
-  $("bux-start").disabled=true; $("bux-stop").disabled=false; $("bux-status").textContent="REC ●";
+  // lock the panel to recording state — Start/camera/calibrate off, only Stop is live
+  $("bux-start").disabled=true; $("bux-cam").disabled=true; $("bux-cal-btn").disabled=true; $("bux-cam-view").disabled=true;
+  $("bux-stop").disabled=false; $("bux-status").textContent="REC ●";
   setHint("Recording… stay on this tab. Press Stop to save.");
 };
 $("bux-stop").onclick = stop;
+
+// Fully release the camera/mic and tear WebGazer down — no lingering mirror.
+function killCamera(){
+  try{ if(window.webgazer){ webgazer.clearGazeListener&&webgazer.clearGazeListener(); webgazer.pause&&webgazer.pause(); webgazer.end&&webgazer.end(); } }catch(e){}
+  try{ const v=document.getElementById("webgazerVideoFeed"); if(v&&v.srcObject) v.srcObject.getTracks().forEach(t=>t.stop()); }catch(e){}
+  try{ if(S.camTrack) S.camTrack.stop(); }catch(e){}
+  try{ if(S.mic) S.mic.getTracks().forEach(t=>t.stop()); }catch(e){}
+  ["webgazerVideoContainer","webgazerVideoFeed","webgazerFaceOverlay","webgazerFaceFeedbackBox"].forEach(id=>{ const el=document.getElementById(id); if(el) el.remove(); });
+  document.documentElement.classList.remove("bux-show-cam");
+  dot.style.display="none"; S.camTrack=null; S.mic=null; S.camReady=false; S.calibrated=false; S.accuracyPx=null;
+}
 async function stop(){
-  if(!S.recording)return; S.recording=false; $("bux-status").textContent="saving…";
+  if(!S.recording)return; S.recording=false; $("bux-stop").disabled=true; $("bux-status").textContent="saving…";
+  // 1) stop every recorder and release ALL its tracks
   await Promise.all(S.recorders.map(r=>new Promise(res=>{ if(r.state==="inactive")return res(); r.onstop=res; try{r.stop();}catch(e){res();} })));
-  S.recorders.forEach(r=>r.stream.getTracks().forEach(t=>t.stop()));
+  S.recorders.forEach(r=>{ try{ r.stream.getTracks().forEach(t=>t.stop()); }catch(e){} });
+  S.recorders=[];
+  // 2) fully shut down the camera/WebGazer (kills the mirror)
+  killCamera();
+  // 3) save into a folder named by site + time
   const p=S.pages[S.pages.length-1]; if(p&&p.endT==null)p.endT=Math.round(nowRel());
   const stamp=new Date(S.startWall).toISOString().replace(/[:.]/g,"-").slice(0,19);
+  const host=(location.hostname||"site").replace(/[^a-z0-9.-]/gi,"_");
+  const folder=`boring-ux/${host}-${stamp}`;
   const m=mime();
-  dl(stamp+"/gaze.csv", csv(["t_ms","x","y","h_region","cell"], S.gaze.map(g=>[g.t,g.x,g.y,g.col,g.cell])));
-  dl(stamp+"/mouse.csv", csv(["t_ms","x","y"], S.mouse.map(g=>[g.t,g.x,g.y])));
-  dl(stamp+"/events.csv", csv(["t_ms","type","detail","gazeRegion","extra"], S.events.map(e=>[e.t,e.type,e.txt||e.title||e.note||"",e.gazeRegion||"",e.url||e.pct||""])));
-  dl(stamp+"/session.json", JSON.stringify(summary(),null,2));
-  dl(stamp+"/SESSION-AI.md", aiBundle());
-  if(S.chunks.face.length) dlBlob(stamp+"/face.webm", new Blob(S.chunks.face,{type:m}));
-  if(S.chunks.audio.length) dlBlob(stamp+"/audio.webm", new Blob(S.chunks.audio,{type:"audio/webm"}));
-  if(S.chunks.screen.length) dlBlob(stamp+"/screen.webm", new Blob(S.chunks.screen,{type:m}));
-  $("bux-status").textContent="saved ✓"; $("bux-start").disabled=false; $("bux-stop").disabled=true;
-  setHint("Saved to Downloads/"+stamp+"/ — "+S.gaze.length+" gaze, "+S.events.length+" events.");
+  await dl(folder+"/gaze.csv", csv(["t_ms","x","y","h_region","cell"], S.gaze.map(g=>[g.t,g.x,g.y,g.col,g.cell])));
+  await dl(folder+"/mouse.csv", csv(["t_ms","x","y"], S.mouse.map(g=>[g.t,g.x,g.y])));
+  await dl(folder+"/events.csv", csv(["t_ms","type","detail","gazeRegion","extra"], S.events.map(e=>[e.t,e.type,e.txt||e.title||e.note||"",e.gazeRegion||"",e.url||e.pct||""])));
+  await dl(folder+"/session.json", JSON.stringify(summary(),null,2));
+  await dl(folder+"/SESSION-AI.md", aiBundle());
+  if(S.chunks.face.length) await dlBlob(folder+"/face.webm", new Blob(S.chunks.face,{type:m}));
+  if(S.chunks.audio.length) await dlBlob(folder+"/audio.webm", new Blob(S.chunks.audio,{type:"audio/webm"}));
+  if(S.chunks.screen.length) await dlBlob(folder+"/screen.webm", new Blob(S.chunks.screen,{type:m}));
+  S.chunks={face:[],audio:[],screen:[]};
+  // 4) reset the panel to the initial state (must Enable camera again for a new session)
+  $("bux-cam").disabled=false; $("bux-cam").textContent="Enable camera";
+  $("bux-cal-btn").disabled=true; $("bux-cam-view").disabled=true; $("bux-start").disabled=true; $("bux-stop").disabled=true;
+  $("bux-status").textContent="saved ✓ · idle"; $("bux-region").textContent="—";
+  setHint("Saved to Downloads/"+folder+"/ ("+S.gaze.length+" gaze, "+S.events.length+" events). Camera off. Enable camera for a new session.");
 }
+addEventListener("beforeunload",()=>{ if(S.recording){ try{ S.recorders.forEach(r=>r.state!=="inactive"&&r.stop()); }catch(e){} } killCamera(); });
 
 /* ---------- outputs ---------- */
 function summary(){ const g=S.regionTime, gt=g.L+g.C+g.R||1;
@@ -239,9 +264,23 @@ Transcribe audio.webm (whisper) → analyze this timeline + transcript (same clo
 function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
 function csv(head,rows){ const esc=v=>{v=(v==null?"":String(v)).replace(/"/g,'""');return /[",\n]/.test(v)?'"'+v+'"':v;};
   return [head.join(","), ...rows.map(r=>r.map(esc).join(","))].join("\n"); }
-function dl(name,text){ dlBlob(name,new Blob([text],{type:"text/plain"})); }
-function dlBlob(name,blob){ const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=name;
-  document.documentElement.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(a.href),8000); }
+function toDataURL(blob){ return new Promise((res,rej)=>{ const fr=new FileReader(); fr.onload=()=>res(fr.result); fr.onerror=rej; fr.readAsDataURL(blob); }); }
+// Save via chrome.downloads (through the background) so files land in a REAL subfolder.
+// Falls back to a flat <a download> only if the messaging download fails.
+async function save(name, blob){
+  try{
+    const dataUrl = await toDataURL(blob);
+    const resp = await chrome.runtime.sendMessage({ bux:"download", filename:name, dataUrl });
+    if(resp && resp.ok) return true;
+    throw new Error(resp && resp.err || "download failed");
+  }catch(e){
+    const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=name.split("/").pop();
+    document.documentElement.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(a.href),8000);
+    return false;
+  }
+}
+function dl(name,text){ return save(name,new Blob([text],{type:"text/plain"})); }
+function dlBlob(name,blob){ return save(name,blob); }
 
 // Show whether the local header-override made the camera usable on a locked-down site
 try{

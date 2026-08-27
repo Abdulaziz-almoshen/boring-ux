@@ -45,6 +45,10 @@ Usability testing normally means a $30k eye-tracker or a per-seat SaaS. This doe
 
 ## Quick start
 
+> 👉 **Most people should use the browser extension** — it works on **any website**, needs no server and no code snippet. Jump to **[The main way to use Boring UX](#-the-main-way-to-use-boring-ux--the-browser-extension)**.
+>
+> The localhost recorder below is optional — only for testing a site you're building locally.
+
 ```bash
 git clone <your-repo-url> boring-ux && cd boring-ux
 python3 -m http.server 8000      # any static server works
@@ -81,17 +85,32 @@ Every saved session folder contains **`SESSION-AI.md`** — a single agent-ready
 
 Either way you get the complete UX report: overall grade, attention graphs, feature-by-feature scorecard, intent heatmaps ("where do users look when confused vs. acting"), findings, a RICE backlog, and a full fused transcript appendix.
 
-## 🧩 Test ANY website (browser extension)
+## 🧩 The main way to use Boring UX — the browser extension
 
-The in-browser recorder only loads sites that allow framing. To eye-track **any site on the web** — including ones that send `X-Frame-Options` — use the bundled **browser extension**. It runs *inside the real page* (like Hotjar/FullStory), so there's no iframe, no header limits, accurate coordinates, and **no `tracker.js` needed** (it sees clicks/mouse natively).
+**Use the extension. It's the whole product.** It runs *inside the real page* (like Hotjar/FullStory) — so it works on **any website on the web**, needs **no `tracker.js` snippet**, no iframe, no server, and captures clicks + mouse natively. (The localhost recorder in the previous section is optional, only for a site you're building locally — you can ignore it.)
 
-**Install (Chrome/Edge, unpacked):**
-1. `chrome://extensions` → toggle **Developer mode** on
-2. **Load unpacked** → select the `extension/` folder
-3. Go to any website → click the **Boring UX** toolbar icon → a panel appears
-4. **Enable camera → Calibrate (13 dots + accuracy check) → Start** → do the task → **Stop & save**
+### Install once (Chrome / Edge)
+1. Download this repo (green **Code ▸ Download ZIP**, then unzip — or `git clone`).
+2. Open **`chrome://extensions`** → turn on **Developer mode** (top-right).
+3. Click **Load unpacked** → select the **`extension/`** folder inside this repo.
+4. Boring UX now shows in your toolbar (pin it via the puzzle-piece icon). ✅ Install is done — you never repeat this.
 
-It downloads a full `session-…/` (gaze.csv, mouse.csv, events.csv, session.json, **SESSION-AI.md**, face/audio/optional screen) — the same AI-ready bundle, from any site. ⚠ Keep the tab in front while recording (eye tracking pauses on hidden tabs; it warns you). The **webcam preview is hidden by default** (still recorded to `face.webm`); a toggle shows a small corner preview for framing, and you can hide the gaze dot so the participant never sees it.
+### Record a session — the one journey
+| # | Do this |
+|---|---|
+| 1 | Open the **website you want to test** — logged in, on the page where the task starts. |
+| 2 | Click the **Boring UX** toolbar icon → a small panel appears in the page. |
+| 3 | **Enable camera → Calibrate** (look at the 13 dots; it shows your accuracy). |
+| 4 | Click **● Start** → the participant does the task **while talking out loud**. They never see their face or the gaze dot. |
+| 5 | Click **■ Stop & save** → camera shuts off, panel resets, and the session saves. |
+
+**Where it saves:** one folder → **`Downloads/boring-ux/<site>-<date-time>/`** containing:
+`gaze.csv` · `mouse.csv` · `events.csv` · `session.json` · **`SESSION-AI.md`** · `face.webm` · `audio.webm` (+ `screen.webm` if you shared the screen).
+
+### Get the report
+Open **`SESSION-AI.md`** from that folder — it's **one self-contained file**: the session data **plus** the complete instructions to turn it into the graded UX report (transcription → gaze/speech fusion → dashboard graphs → feature scorecard → findings → RICE backlog → intent heatmaps, with an example and the design spec). Hand that one file (and the folder) to **Claude/ChatGPT**, or run **Claude Code** in the folder and say *"analyze this session"* (the bundled `.claude/skills/boring-ux-report` skill does it end-to-end).
+
+> ⚠ Keep the tab in front while recording — eye tracking pauses on hidden tabs (it warns you and marks the gap). The **webcam preview is hidden by default** (still recorded to `face.webm`); a toggle shows a small corner preview for framing.
 
 ### Locked-down sites (`Permissions-Policy: camera=()`)
 A few sites disable the camera for everything in their page via a `Permissions-Policy` header — so even with camera permission granted, in-page tracking is blocked. For these, the extension applies a **local testing override**: on activation it strips that header (and `X-Frame-Options`) from the response **in your browser only**, for the domain you're testing, then reloads so the camera works.

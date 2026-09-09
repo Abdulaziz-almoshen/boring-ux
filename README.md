@@ -92,6 +92,8 @@ A few sites disable the camera for everything in their page via a `Permissions-P
 | `audio.webm` | audio only |
 | `screen.webm` | screen recording + voice (only if you shared the screen) |
 
+> **Recorded before Sept 9, 2026 and `face.webm`/`screen.webm` won't play?** A data-URL bug saved them as base64 text (audio was unaffected). Nothing is lost — run `python3 tools/recover-webm.py ~/Downloads/boring-ux` to decode them back to valid video.
+
 ## Honest limitations
 
 - **Webcam gaze is region-accurate, not pixel-perfect.** The extension tracks gaze with **MediaPipe FaceLandmarker** (per-eye **iris landmarks + 3D head-pose**) mapped to the screen by a ridge regression — a big step up from classic 2D webcam trackers. It's still fought three more ways: a required **13-point calibration**, a **validation pass that measures your real accuracy in px** (saved into `session.json` as `gazeAccuracyPx`), and **continuous recalibration from every in-page click**. Still: great for regions and heatmaps, not for telling two adjacent buttons apart — hardware trackers exist for that.

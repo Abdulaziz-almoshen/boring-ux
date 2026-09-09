@@ -85,6 +85,8 @@ window.addEventListener("message", e=>{
   if(d.evt==="gaze") onGaze({x:d.x,y:d.y});
   else if(d.evt==="ready"){ if(S._engWait){ S._engWait.res(); S._engWait=null; } }
   else if(d.evt==="error"){ if(S._engWait){ S._engWait.rej(new Error(d.msg||"engine error")); S._engWait=null; } }
+  else if(d.evt==="face"){ if(!S.recording && !S.calibrated){ $("bux-region").textContent = d.ok ? "face ✓" : "no face";
+    setHint(d.ok ? "Face detected ✓ — now click ‘Calibrate gaze’. The dot appears after calibration." : "No face detected — center your face and check lighting."); } }
 });
 
 $("bux-cam").onclick = async () => {
@@ -102,8 +104,9 @@ $("bux-cam").onclick = async () => {
       setTimeout(()=>{ if(S._engWait){ S._engWait=null; rej(new Error("model load timed out — see console")); } },25000);
     });
     S.camReady=true;
-    $("bux-cam").textContent="Camera on ✓"; $("bux-cal-btn").disabled=false; $("bux-start").disabled=false; $("bux-cam-view").disabled=false;
-    dot.style.display="block"; setHint("Face hidden by default. Calibrate, then Start. (Camera still records to face.webm.)");
+    $("bux-cam").textContent="Camera on ✓"; $("bux-status").textContent="idle";
+    $("bux-cal-btn").disabled=false; $("bux-start").disabled=false; $("bux-cam-view").disabled=false;
+    setHint("Camera on ✓ — click ‘Calibrate gaze’ next. The gaze dot appears only after calibration.");
   }catch(e){
     try{ if(S.stream) S.stream.getTracks().forEach(t=>t.stop()); }catch(_){} S.stream=null;
     $("bux-cam").disabled=false; $("bux-cam").textContent="Enable camera";

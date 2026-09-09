@@ -90,6 +90,8 @@
     });
   }
 
+  function beat(ok) { const now = performance.now(); if (now - (G.hb || 0) > 200) { G.hb = now; post("face", { ok }); } }
+
   function loop() {
     if (!G.running) return;
     G.raf = requestAnimationFrame(loop);
@@ -97,7 +99,7 @@
     if (!v || v.readyState < 2) return;
     const ts = performance.now(); if (ts <= G.lastTs) return; G.lastTs = ts;
     let res; try { res = G.landmarker.detectForVideo(v, ts); } catch (e) { return; }
-    if (!res || !res.faceLandmarks || !res.faceLandmarks.length) return;
+    if (!res || !res.faceLandmarks || !res.faceLandmarks.length) { beat(false); return; }
     const lms = res.faceLandmarks[0];
     const mat = res.facialTransformationMatrixes && res.facialTransformationMatrixes[0]
       ? res.facialTransformationMatrixes[0].data : null;
@@ -110,7 +112,7 @@
       if (G.sx == null) { G.sx = p.x; G.sy = p.y; }
       else { G.sx = SMOOTH * p.x + (1 - SMOOTH) * G.sx; G.sy = SMOOTH * p.y + (1 - SMOOTH) * G.sy; }
       post("gaze", { x: G.sx, y: G.sy });
-    }
+    } else { beat(true); }   // face found but not calibrated yet — let the UI show it's alive
   }
 
   function calibrate(px, py) {

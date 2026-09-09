@@ -1,16 +1,19 @@
 /* Boring UX — MediaPipe gaze engine (runs in the PAGE MAIN world).
  *
- * Why main world: MediaPipe's bundle loads its wasm loader with
- * document.createElement("script"), which executes in the main world and sets
- * self.ModuleFactory there. The library then reads self.ModuleFactory from the
- * SAME world. In a content-script isolated world those two selves differ, so it
- * throws "ModuleFactory not set." Running here keeps loader + library in one world.
+ * Why main world: MediaPipe loads its wasm loader with a <script> tag that runs
+ * in the main world and sets self.ModuleFactory there; the library reads it from
+ * the same world. In a content-script isolated world those selves differ →
+ * "ModuleFactory not set." Running here keeps loader + library in one world.
  *
- * The content script (isolated world) owns the camera, recording, UI, and
- * downloads. It shares the <video id="bux-mp-video"> element via the DOM and
- * talks to this engine over window.postMessage:
+ * The isolated content script owns camera/recording/UI/downloads and shares the
+ * <video id="bux-mp-video"> via the DOM. Bridge over window.postMessage:
  *   content → engine : {source:"bux-content", cmd:"init"|"calibrate"|"stop", ...}
- *   engine  → content : {source:"bux-engine", evt:"ready"|"error"|"gaze", ...}
+ *   engine  → content : {source:"bux-engine", evt:"ready"|"error"|"gaze"|"face", ...}
+ *
+ * Gaze model: per-eye iris offset (measured in a consistent screen-ward
+ * direction, normalized by eye size) is combined, expanded to a 2nd-order
+ * polynomial, and mapped to screen x/y by ridge regression trained on the
+ * calibration dots (multiple frames per click, blinks rejected).
  */
 (function () {
   if (window.__buxEngine) return; window.__buxEngine = true;
@@ -19,33 +22,52 @@
     Louter: 33, Linner: 133, Lup: 159, Ldn: 145, Liris: [468, 469, 470, 471, 472],
     Router: 263, Rinner: 362, Rup: 386, Rdn: 374, Riris: [473, 474, 475, 476, 477]
   };
-  const DIM = 13, MAXN = 600, MINPTS = 6, LAMBDA = 1e-3, SMOOTH = 0.35, FEAT_EMA = 0.5;
+  const DIM = 14;                 // polynomial feature vector length
+  const MAXN = 900;               // calibration sample cap
+  const MINPTS = 12;              // samples needed before predicting
+  const LAMBDA = 5e-3;            // ridge regularization
+  const SMOOTH = 0.4;             // EMA on the predicted point
+  const OPEN_MIN = 0.10;          // eye-openness floor (reject blinks)
+  const COLLECT_MS = 320;         // per-click sampling window
+  const COLLECT_GAP = 45;         // min ms between collected samples
 
   const G = {
     base: null, vision: null, landmarker: null, running: false, raf: 0,
     X: [], Yx: [], Yy: [], Wx: null, Wy: null,
-    lastFeat: null, featEMA: null, sx: null, sy: null, lastTs: 0
+    sx: null, sy: null, lastTs: 0, hb: 0,
+    collect: null, lastCollect: 0, lastRaw: null
   };
 
   const post = (evt, extra) => window.postMessage(Object.assign({ source: "bux-engine", evt }, extra || {}), "*");
+  const mean = (lms, idx) => { let x = 0, y = 0; for (const i of idx) { x += lms[i].x; y += lms[i].y; } return { x: x / idx.length, y: y / idx.length }; };
 
-  function mean(lms, idx) { let x = 0, y = 0; for (const i of idx) { x += lms[i].x; y += lms[i].y; } return { x: x / idx.length, y: y / idx.length }; }
-
-  function extract(lms, matrix) {
-    const li = mean(lms, L.Liris), ri = mean(lms, L.Riris);
-    const lo = lms[L.Louter], lin = lms[L.Linner], lup = lms[L.Lup], ldn = lms[L.Ldn];
-    const ro = lms[L.Router], rin = lms[L.Rinner], rup = lms[L.Rup], rdn = lms[L.Rdn];
-    const sx = v => (Math.abs(v) < 1e-6 ? 1e-6 : v);
-    const lx = (li.x - lin.x) / sx(lo.x - lin.x);
-    const ly = (li.y - lup.y) / sx(ldn.y - lup.y);
-    const rx = (ri.x - rin.x) / sx(ro.x - rin.x);
-    const ry = (ri.y - rup.y) / sx(rdn.y - rup.y);
+  // Raw eye/head signal from one frame. Iris offset is measured relative to the
+  // eye center and normalized by eye width/height, in a CONSISTENT direction for
+  // both eyes (positive = iris toward image-right / down), so averaging is valid.
+  function raw(lms, matrix) {
+    const eye = (iris, inner, outer, up, dn) => {
+      const cx = (inner.x + outer.x) / 2, w = Math.abs(outer.x - inner.x) || 1e-6;
+      const cy = (up.y + dn.y) / 2, h = Math.abs(dn.y - up.y) || 1e-6;
+      return { ex: (iris.x - cx) / w, ey: (iris.y - cy) / h, open: h / (w || 1e-6) };
+    };
+    const Le = eye(mean(lms, L.Liris), lms[L.Linner], lms[L.Louter], lms[L.Lup], lms[L.Ldn]);
+    const Re = eye(mean(lms, L.Riris), lms[L.Rinner], lms[L.Router], lms[L.Rup], lms[L.Rdn]);
     let yaw = 0, pitch = 0;
     if (matrix && matrix.length >= 11) {
       yaw = Math.atan2(matrix[8], matrix[10]);
       pitch = Math.atan2(-matrix[9], Math.hypot(matrix[8], matrix[10]));
     }
-    return [1, lx, ly, rx, ry, yaw, pitch, lx * yaw, rx * yaw, ly * pitch, ry * pitch, (lx + rx) / 2, (ly + ry) / 2];
+    return {
+      ex: (Le.ex + Re.ex) / 2, ey: (Le.ey + Re.ey) / 2,
+      exL: Le.ex, exR: Re.ex, eyL: Le.ey, eyR: Re.ey,
+      yaw, pitch, open: (Le.open + Re.open) / 2
+    };
+  }
+
+  // 2nd-order polynomial feature vector (captures the curvature of gaze→screen).
+  function feat(r) {
+    const { ex, ey, exL, exR, eyL, eyR, yaw, pitch } = r;
+    return [1, ex, ey, ex * ex, ey * ey, ex * ey, yaw, pitch, ex * yaw, ey * pitch, exL, exR, eyL, eyR];
   }
 
   function solve(A, b) {
@@ -77,7 +99,12 @@
   function predict(f) {
     if (!G.Wx) return null;
     let x = 0, y = 0; for (let i = 0; i < DIM; i++) { x += f[i] * G.Wx[i]; y += f[i] * G.Wy[i]; }
-    return { x: x * innerWidth, y: y * innerHeight };
+    return { x: Math.max(0, Math.min(innerWidth, x * innerWidth)), y: Math.max(0, Math.min(innerHeight, y * innerHeight)) };
+  }
+
+  function addSample(r, px, py) {
+    G.X.push(feat(r)); G.Yx.push(px / innerWidth); G.Yy.push(py / innerHeight);
+    if (G.X.length > MAXN) { G.X.shift(); G.Yx.shift(); G.Yy.shift(); }
   }
 
   async function init() {
@@ -90,7 +117,7 @@
     });
   }
 
-  function beat(ok) { const now = performance.now(); if (now - (G.hb || 0) > 200) { G.hb = now; post("face", { ok }); } }
+  function beat(ok) { const now = performance.now(); if (now - G.hb > 200) { G.hb = now; post("face", { ok }); } }
 
   function loop() {
     if (!G.running) return;
@@ -103,30 +130,38 @@
     const lms = res.faceLandmarks[0];
     const mat = res.facialTransformationMatrixes && res.facialTransformationMatrixes[0]
       ? res.facialTransformationMatrixes[0].data : null;
-    const raw = extract(lms, mat);
-    if (!G.featEMA) G.featEMA = raw.slice();
-    else for (let i = 0; i < DIM; i++) G.featEMA[i] = FEAT_EMA * raw[i] + (1 - FEAT_EMA) * G.featEMA[i];
-    G.lastFeat = G.featEMA;
-    const p = predict(G.featEMA);
+    const r = raw(lms, mat);
+    const blink = r.open < OPEN_MIN;
+    if (!blink) G.lastRaw = r;
+
+    // Collect calibration samples for a short window after each dot click.
+    if (G.collect && !blink && ts - G.lastCollect >= COLLECT_GAP) {
+      G.lastCollect = ts;
+      addSample(r, G.collect.px, G.collect.py);
+      if (ts >= G.collect.end) { G.collect = null; retrain(); }
+      else retrain();
+    } else if (G.collect && ts >= G.collect.end) { G.collect = null; retrain(); }
+
+    const p = blink ? null : predict(feat(r));
     if (p) {
       if (G.sx == null) { G.sx = p.x; G.sy = p.y; }
       else { G.sx = SMOOTH * p.x + (1 - SMOOTH) * G.sx; G.sy = SMOOTH * p.y + (1 - SMOOTH) * G.sy; }
       post("gaze", { x: G.sx, y: G.sy });
-    } else { beat(true); }   // face found but not calibrated yet — let the UI show it's alive
+    } else { beat(true); }
   }
 
   function calibrate(px, py) {
-    if (!G.lastFeat) return;
-    G.X.push(G.lastFeat.slice()); G.Yx.push(px / innerWidth); G.Yy.push(py / innerHeight);
-    if (G.X.length > MAXN) { G.X.shift(); G.Yx.shift(); G.Yy.shift(); }
-    retrain();
+    // open a short sampling window; the loop pushes several frames for this dot
+    G.collect = { px, py, end: performance.now() + COLLECT_MS };
+    // also grab the current frame immediately so a fast click still yields a sample
+    if (G.lastRaw) { addSample(G.lastRaw, px, py); retrain(); }
   }
 
   function stop() {
     G.running = false; if (G.raf) cancelAnimationFrame(G.raf); G.raf = 0;
     try { G.landmarker && G.landmarker.close(); } catch (e) {}
     G.landmarker = null; G.X = []; G.Yx = []; G.Yy = []; G.Wx = G.Wy = null;
-    G.lastFeat = G.featEMA = null; G.sx = G.sy = null; G.lastTs = 0;
+    G.sx = G.sy = null; G.lastTs = 0; G.collect = null; G.lastRaw = null;
   }
 
   window.addEventListener("message", async (e) => {

@@ -94,14 +94,14 @@ A few sites disable the camera for everything in their page via a `Permissions-P
 
 ## Honest limitations
 
-- **Webcam gaze is region-accurate, not pixel-perfect** (~50–150px). The recorder now fights this three ways: a required **13-point calibration**, a **validation pass that measures your real accuracy in px** (saved into `session.json` as `gazeAccuracyPx` so reports can weight the data), and **continuous recalibration from every in-page click** during the session. Still: great for regions and heatmaps, not for telling two adjacent buttons apart — hardware trackers exist for that.
+- **Webcam gaze is region-accurate, not pixel-perfect.** The extension tracks gaze with **MediaPipe FaceLandmarker** (per-eye **iris landmarks + 3D head-pose**) mapped to the screen by a ridge regression — a big step up from classic 2D webcam trackers. It's still fought three more ways: a required **13-point calibration**, a **validation pass that measures your real accuracy in px** (saved into `session.json` as `gazeAccuracyPx`), and **continuous recalibration from every in-page click**. Still: great for regions and heatmaps, not for telling two adjacent buttons apart — hardware trackers exist for that.
 - **Calibrate every session** — the panel warns you before starting uncalibrated; the measured accuracy score tells you when to redo it (aim for <140px).
 - **Keep the recording tab in front** — Chrome pauses eye tracking on hidden tabs (the panel warns you and marks the gap).
 - The report's *spoken* analysis needs a transcription step (Whisper, one local command — private; the exact command is inside `SESSION-AI.md`).
 
 ## How it works
 
-The **extension** injects a content script into the real page, runs WebGazer on the webcam for the two gaze layers, records `MediaRecorder` tracks (face/audio/optional screen) streamed to disk, and logs gaze + clicks + mouse + page changes on one clock — natively, so no snippet is required. On stop it writes the whole session into one `Downloads/boring-ux/<site>-<time>/` folder via the `chrome.downloads` API, with a self-contained `SESSION-AI.md`. Everything is vanilla JS — no build step, WebGazer is bundled.
+The **extension** injects a content script into the real page, runs **MediaPipe FaceLandmarker** on the webcam (iris + head-pose → screen gaze via a ridge regression trained on the calibration dots), records `MediaRecorder` tracks (face/audio/optional screen) streamed to disk, and logs gaze + clicks + mouse + page changes on one clock — natively, so no snippet is required. On stop it writes the whole session into one `Downloads/boring-ux/<site>-<time>/` folder via the `chrome.downloads` API, with a self-contained `SESSION-AI.md`. Everything is vanilla JS — no build step; MediaPipe's WASM + model are bundled in `extension/vendor/mediapipe/`. The gaze approach is adapted from [JEOresearch/EyeTracker](https://github.com/JEOresearch/EyeTracker)'s webcam 3D tracker, ported to run in the browser.
 
 <details>
 <summary><b>Optional: the localhost recorder</b> (only for a site you're building locally)</summary>

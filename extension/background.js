@@ -29,7 +29,7 @@ async function ensureStripRule(domain){
   });
 }
 async function inject(tabId){
-  await chrome.scripting.executeScript({ target:{tabId}, files:["webgazer.js"] });
+  await chrome.scripting.executeScript({ target:{tabId}, files:["gaze-mediapipe.js"] });
   await chrome.scripting.executeScript({ target:{tabId}, files:["content.js"] });
 }
 

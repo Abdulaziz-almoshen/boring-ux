@@ -85,6 +85,9 @@ $("bux-cam").onclick = async () => {
     if(!window.webgazer){ alert("WebGazer not loaded"); return; }
     webgazer.params.showVideoPreview=true; webgazer.showPredictionPoints(false); webgazer.applyKalmanFilter(true);
     await webgazer.setRegression("ridge").setGazeListener(onGaze).begin();
+    // WebGazer trains on mouse move/click by default → the dot "follows the cursor".
+    // Turn that off so gaze is driven by the eyes + our explicit calibration dots only.
+    try{ webgazer.removeMouseEventListeners(); }catch(_){}
     try{ webgazer.showFaceOverlay(false); webgazer.showFaceFeedbackBox(false); }catch(_){}
     S.camTrack = await waitFeed(); S.camReady=true;
     $("bux-cam").textContent="Camera on ✓"; $("bux-cal-btn").disabled=false; $("bux-start").disabled=false; $("bux-cam-view").disabled=false;

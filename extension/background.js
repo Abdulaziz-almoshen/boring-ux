@@ -1,4 +1,4 @@
-// Toolbar click → inject the gaze engine + the recorder panel into the current tab.
+// Toolbar click → inject WebGazer + the recorder panel into the current tab.
 // Runs in the real page, so it works on ANY site (no iframe, no X-Frame-Options).
 //
 // Locked-down sites: some sites send `Permissions-Policy: camera=()` which forbids
@@ -29,9 +29,7 @@ async function ensureStripRule(domain){
   });
 }
 async function inject(tabId){
-  // Engine in the page MAIN world (so MediaPipe's wasm loader + library share one world);
-  // the recorder/UI in the isolated content-script world. They bridge via postMessage.
-  await chrome.scripting.executeScript({ target:{tabId}, files:["gaze-mediapipe.js"], world:"MAIN" });
+  await chrome.scripting.executeScript({ target:{tabId}, files:["webgazer.js"] });
   await chrome.scripting.executeScript({ target:{tabId}, files:["content.js"] });
 }
 

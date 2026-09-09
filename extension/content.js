@@ -5,7 +5,7 @@
 if (window.__boringUX) { window.__boringUX.toggle(); return; }
 
 const S = {
-  recording:false, calibrated:false, accuracyPx:null, startPerf:0, startWall:0, stream:null,
+  recording:false, calibrated:false, accuracyPx:null, startPerf:0, startWall:0,
   gaze:[], mouse:[], events:[], pages:[], lastGx:null, lastGy:null, lastRegion:null, lastGazeT:0,
   regionTime:{L:0,C:0,R:0}, recorders:[], chunks:{face:[],audio:[],screen:[]}, recentClicks:[],
   lastMouse:0, sw:0, lastDir:0, dirChanges:0, dirWinStart:0, maxScroll:0
@@ -31,8 +31,9 @@ css.textContent = `
 .bux-caldot{position:absolute;width:34px;height:34px;border-radius:50%;background:#ff5470;border:3px solid #fff;
  cursor:pointer;transform:translate(-50%,-50%);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#fff}
 .bux-caldot.done{background:#37d67a;color:#04210f}
-#bux-mp-video{position:fixed!important;z-index:2147483645!important;bottom:64px!important;left:10px!important;right:auto!important;top:auto!important;width:180px!important;height:auto!important;opacity:.92;border-radius:10px;overflow:hidden;box-shadow:0 6px 24px rgba(0,0,0,.5);transform:scaleX(-1);display:none!important}
-html.bux-show-cam #bux-mp-video{display:block!important}`;
+#webgazerVideoContainer{display:none!important;z-index:2147483645!important;top:auto!important;bottom:64px!important;left:10px!important;right:auto!important;width:180px!important;height:auto!important;opacity:.92;border-radius:10px;overflow:hidden;box-shadow:0 6px 24px rgba(0,0,0,.5)}
+html.bux-show-cam #webgazerVideoContainer{display:block!important}
+#webgazerFaceOverlay,#webgazerFaceFeedbackBox{display:none!important}`;
 document.documentElement.appendChild(css);
 
 const panel = document.createElement("div"); panel.id="bux-panel";
@@ -70,45 +71,25 @@ function onGaze(data){
     if(col){ if(S.lastRegion&&S.lastGazeT) S.regionTime[S.lastRegion]+=(t-S.lastGazeT); S.lastRegion=col; S.lastGazeT=t; }
   }
 }
+async function waitFeed(){ for(let i=0;i<40;i++){ const v=document.getElementById("webgazerVideoFeed"); if(v&&v.srcObject&&v.srcObject.getVideoTracks().length) return v.srcObject.getVideoTracks()[0]; await sleep(200);} return null; }
+
 $("bux-cam-view").onclick = () => {
   const on = document.documentElement.classList.toggle("bux-show-cam");
   $("bux-cam-view").textContent = on ? "🙈 Hide camera preview" : "👁 Show camera preview";
 };
 $("bux-dot-toggle").onchange = e => { S.showDot = e.target.checked; if(!S.showDot) dot.style.display="none"; };
 S.showDot = true;
-
-/* ---------- engine bridge (MediaPipe runs in the page MAIN world) ---------- */
-function eng(cmd, extra){ window.postMessage(Object.assign({source:"bux-content",cmd},extra||{}),"*"); }
-window.addEventListener("message", e=>{
-  if(e.source!==window || !e.data || e.data.source!=="bux-engine") return;
-  const d=e.data;
-  if(d.evt==="gaze") onGaze({x:d.x,y:d.y});
-  else if(d.evt==="ready"){ if(S._engWait){ S._engWait.res(); S._engWait=null; } }
-  else if(d.evt==="error"){ if(S._engWait){ S._engWait.rej(new Error(d.msg||"engine error")); S._engWait=null; } }
-  else if(d.evt==="face"){ if(!S.recording && !S.calibrated && !S.calibrating){ $("bux-region").textContent = d.ok ? "face ✓" : "no face";
-    setHint(d.ok ? "Face detected ✓ — now click ‘Calibrate gaze’. The dot appears after calibration." : "No face detected — center your face and check lighting."); } }
-});
-
 $("bux-cam").onclick = async () => {
   $("bux-cam").disabled=true; $("bux-cam").textContent="Starting…";
   try{
-    setHint("Loading eye-tracking model… (first time can take a few seconds)");
-    // Camera lives here (isolated world); MediaPipe reads the same <video> from the main world.
-    S.stream = await navigator.mediaDevices.getUserMedia({video:{width:640,height:480,facingMode:"user"},audio:false});
-    S.camTrack = S.stream.getVideoTracks()[0];
-    let v=document.getElementById("bux-mp-video");
-    if(!v){ v=document.createElement("video"); v.id="bux-mp-video"; v.autoplay=true; v.playsInline=true; v.muted=true; document.documentElement.appendChild(v); }
-    v.srcObject=S.stream; try{ await v.play(); }catch(_){}
-    await new Promise((res,rej)=>{ S._engWait={res,rej};
-      eng("init",{base: chrome.runtime.getURL("vendor/mediapipe/")});
-      setTimeout(()=>{ if(S._engWait){ S._engWait=null; rej(new Error("model load timed out — see console")); } },25000);
-    });
-    S.camReady=true;
-    $("bux-cam").textContent="Camera on ✓"; $("bux-status").textContent="idle";
-    $("bux-cal-btn").disabled=false; $("bux-start").disabled=false; $("bux-cam-view").disabled=false;
-    setHint("Camera on ✓ — click ‘Calibrate gaze’ next. The gaze dot appears only after calibration.");
+    if(!window.webgazer){ alert("WebGazer not loaded"); return; }
+    webgazer.params.showVideoPreview=true; webgazer.showPredictionPoints(false); webgazer.applyKalmanFilter(true);
+    await webgazer.setRegression("ridge").setGazeListener(onGaze).begin();
+    try{ webgazer.showFaceOverlay(false); webgazer.showFaceFeedbackBox(false); }catch(_){}
+    S.camTrack = await waitFeed(); S.camReady=true;
+    $("bux-cam").textContent="Camera on ✓"; $("bux-cal-btn").disabled=false; $("bux-start").disabled=false; $("bux-cam-view").disabled=false;
+    dot.style.display="block"; setHint("Face hidden by default. Calibrate, then Start. (Camera still records to face.webm.)");
   }catch(e){
-    try{ if(S.stream) S.stream.getTracks().forEach(t=>t.stop()); }catch(_){} S.stream=null;
     $("bux-cam").disabled=false; $("bux-cam").textContent="Enable camera";
     // Distinguish site-policy block from a normal permission/in-use error
     let policyBlocked=false;
@@ -126,42 +107,27 @@ $("bux-cam").onclick = async () => {
 
 /* ---------- calibration + validation ---------- */
 $("bux-cal-btn").onclick = startCal;
-// Inline every style so the overlay can't be killed by the tested site's stylesheet/CSP.
-const CAL_CSS = "position:fixed!important;inset:0!important;top:0!important;left:0!important;width:100vw!important;height:100vh!important;background:rgba(6,8,12,.94)!important;z-index:2147483647!important;display:block!important;pointer-events:auto!important";
-function mkDot(xvw,yvw,clickable){
-  const d=document.createElement("div");
-  d.style.cssText="position:fixed;width:34px;height:34px;border-radius:50%;background:#ff5470;border:3px solid #fff;"+
-    "transform:translate(-50%,-50%);display:flex;align-items:center;justify-content:center;font:700 11px -apple-system,Arial;"+
-    "color:#fff;z-index:2147483647;"+(clickable?"cursor:pointer;":"pointer-events:none;")+"left:"+xvw+"vw;top:"+yvw+"vh";
-  return d;
-}
 function startCal(){
-  console.log("[BoringUX] startCal fired");
-  S.calibrating=true;
-  cal.style.cssText=CAL_CSS; cal.innerHTML="";
-  const msg=document.createElement("div");
-  msg.style.cssText="position:fixed;top:24px;left:0;right:0;text-align:center;font:15px -apple-system,Arial;color:#fff;z-index:2147483647";
-  msg.innerHTML='Click each red dot <b>4 times</b> while looking at it. <small>13 points, then an accuracy check.</small>';
-  cal.appendChild(msg);
+  cal.style.display="block"; cal.querySelectorAll(".bux-caldot").forEach(d=>d.remove());
+  cal.querySelector(".msg").innerHTML='Click each red dot <b>4 times</b> while looking at it. <small>13 points, then an accuracy check.</small>';
   const pts=[[10,12],[50,12],[90,12],[30,30],[70,30],[10,50],[50,50],[90,50],[30,70],[70,70],[10,88],[50,88],[90,88]];
   let remaining=pts.length;
-  pts.forEach(([x,y])=>{ const d=mkDot(x,y,true); let c=0; d.textContent="0/4";
-    d.onclick=()=>{ const r=d.getBoundingClientRect(); eng("calibrate",{x:r.left+r.width/2, y:r.top+r.height/2});
-      c++; d.textContent=c+"/4"; if(c>=4){ d.style.background="#37d67a"; d.style.color="#04210f"; d.style.pointerEvents="none";
+  pts.forEach(([x,y])=>{ const d=document.createElement("div"); d.className="bux-caldot";
+    d.style.left=x+"vw"; d.style.top=y+"vh"; let c=0; d.textContent="0/4";
+    d.onclick=()=>{ c++; d.textContent=c+"/4"; if(c>=4){ d.classList.add("done"); d.style.pointerEvents="none";
       if(--remaining===0) setTimeout(validate,300); } };
     cal.appendChild(d); });
 }
 async function validate(){
-  cal.innerHTML="";
-  const msg=document.createElement("div");
-  msg.style.cssText="position:fixed;top:24px;left:0;right:0;text-align:center;font:15px -apple-system,Arial;color:#fff;z-index:2147483647";
-  msg.innerHTML='<b>Accuracy check</b> — just LOOK at each dot.'; cal.appendChild(msg);
+  cal.querySelectorAll(".bux-caldot").forEach(d=>d.remove());
+  cal.querySelector(".msg").innerHTML='<b>Accuracy check</b> — just LOOK at each dot.';
   const vpts=[[25,25],[75,25],[25,75],[75,75]], errs=[];
-  for(const [vx,vy] of vpts){ const d=mkDot(vx,vy,false); d.textContent="👁"; cal.appendChild(d);
+  for(const [vx,vy] of vpts){ const d=document.createElement("div"); d.className="bux-caldot";
+    d.style.left=vx+"vw"; d.style.top=vy+"vh"; d.style.pointerEvents="none"; d.textContent="👁"; cal.appendChild(d);
     await sleep(700); const tx=vx/100*innerWidth, ty=vy/100*innerHeight, s=[];
     for(let i=0;i<12;i++){ await sleep(100); if(S.lastGx!=null) s.push(Math.hypot(S.lastGx-tx,S.lastGy-ty)); }
     if(s.length){ s.sort((a,b)=>a-b); errs.push(s[s.length>>1]); } d.remove(); }
-  cal.style.display="none"; S.calibrated=true; S.calibrating=false;
+  cal.style.display="none"; S.calibrated=true;
   S.accuracyPx = errs.length?Math.round(errs.reduce((a,b)=>a+b,0)/errs.length):null;
   setHint("Calibrated ✓ accuracy ≈ "+(S.accuracyPx??"?")+"px. Press Start.");
 }
@@ -175,7 +141,7 @@ function ev(o){ if(S.recording){ o.t=Math.round(nowRel()); S.events.push(o); } }
 
 document.addEventListener("click",e=>{ if(!S.recording)return; const el=e.target||{}; const clickable=isClickable(el);
   ev({type:"click",x:e.clientX,y:e.clientY,tag:el.tagName||"",txt:(el.innerText||el.value||"").toString().trim().slice(0,60),clickable,gazeRegion:S.lastRegion||"?"});
-  eng("calibrate",{x:e.clientX,y:e.clientY});
+  try{ if(window.webgazer) webgazer.recordScreenPosition(e.clientX,e.clientY,"click"); }catch(_){}
   const now=performance.now(); S.recentClicks.push({x:e.clientX,y:e.clientY,t:now});
   S.recentClicks=S.recentClicks.filter(c=>now-c.t<1200);
   if(S.recentClicks.filter(c=>Math.hypot(c.x-e.clientX,c.y-e.clientY)<40).length>=3){ ev({type:"rage_click",x:e.clientX,y:e.clientY}); S.recentClicks=[]; }
@@ -218,15 +184,15 @@ $("bux-start").onclick = async () => {
 };
 $("bux-stop").onclick = stop;
 
-// Fully release the camera/mic and tear the gaze engine down — no lingering mirror.
+// Fully release the camera/mic and tear WebGazer down — no lingering mirror.
 function killCamera(){
-  try{ eng("stop"); }catch(e){}
-  try{ if(S.stream) S.stream.getTracks().forEach(t=>t.stop()); }catch(e){}
+  try{ if(window.webgazer){ webgazer.clearGazeListener&&webgazer.clearGazeListener(); webgazer.pause&&webgazer.pause(); webgazer.end&&webgazer.end(); } }catch(e){}
+  try{ const v=document.getElementById("webgazerVideoFeed"); if(v&&v.srcObject) v.srcObject.getTracks().forEach(t=>t.stop()); }catch(e){}
   try{ if(S.camTrack) S.camTrack.stop(); }catch(e){}
   try{ if(S.mic) S.mic.getTracks().forEach(t=>t.stop()); }catch(e){}
-  const mv=document.getElementById("bux-mp-video"); if(mv){ try{mv.srcObject=null;}catch(_){} mv.remove(); }
+  ["webgazerVideoContainer","webgazerVideoFeed","webgazerFaceOverlay","webgazerFaceFeedbackBox"].forEach(id=>{ const el=document.getElementById(id); if(el) el.remove(); });
   document.documentElement.classList.remove("bux-show-cam");
-  dot.style.display="none"; S.stream=null; S.camTrack=null; S.mic=null; S.camReady=false; S.calibrated=false; S.accuracyPx=null;
+  dot.style.display="none"; S.camTrack=null; S.mic=null; S.camReady=false; S.calibrated=false; S.accuracyPx=null;
 }
 async function stop(){
   if(!S.recording)return; S.recording=false; $("bux-stop").disabled=true; $("bux-status").textContent="saving…";
@@ -234,7 +200,7 @@ async function stop(){
   await Promise.all(S.recorders.map(r=>new Promise(res=>{ if(r.state==="inactive")return res(); r.onstop=res; try{r.stop();}catch(e){res();} })));
   S.recorders.forEach(r=>{ try{ r.stream.getTracks().forEach(t=>t.stop()); }catch(e){} });
   S.recorders=[];
-  // 2) fully shut down the camera/gaze engine (kills the mirror)
+  // 2) fully shut down the camera/WebGazer (kills the mirror)
   killCamera();
   // 3) save into a folder named by site + time
   const p=S.pages[S.pages.length-1]; if(p&&p.endT==null)p.endT=Math.round(nowRel());

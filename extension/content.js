@@ -347,10 +347,16 @@ function toDataURL(blob){ return new Promise((res,rej)=>{ const fr=new FileReade
 async function save(name, blob){
   let err=null;
   try{
-    let dataUrl = await toDataURL(blob);
-    // Force the MIME to octet-stream so Chrome keeps the EXACT filename+extension we pass
-    // (a text/plain data URL makes chrome.downloads rewrite .csv/.json/.md → .txt).
-    dataUrl = dataUrl.replace(/^data:[^;,]*/, "data:application/octet-stream");
+    const raw = await toDataURL(blob);
+    // Rebuild the data URL with a comma-free octet-stream MIME. Two reasons:
+    //  1) Chrome keeps the EXACT filename+extension we pass (text/plain would force .txt).
+    //  2) A data URL's media-type ends at the FIRST comma — "video/webm;codecs=vp9,opus"
+    //     contains a comma, which made Chrome treat "opus;base64,..." as the payload and
+    //     write base64 TEXT instead of the video (corrupt face.webm/screen.webm). Slicing
+    //     after the fixed ";base64," marker is exact regardless of the blob's MIME.
+    const i = raw.indexOf(";base64,");
+    if (i < 0) throw new Error("unexpected data URL");
+    const dataUrl = "data:application/octet-stream;base64," + raw.slice(i + 8);
     const resp = await chrome.runtime.sendMessage({ bux:"download", filename:name, dataUrl });
     if(resp && resp.ok) return { ok:true };
     err = (resp && resp.err) || "no response from extension background";

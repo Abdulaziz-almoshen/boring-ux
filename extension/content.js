@@ -126,25 +126,38 @@ $("bux-cam").onclick = async () => {
 
 /* ---------- calibration + validation ---------- */
 $("bux-cal-btn").onclick = startCal;
+// Inline every style so the overlay can't be killed by the tested site's stylesheet/CSP.
+const CAL_CSS = "position:fixed!important;inset:0!important;top:0!important;left:0!important;width:100vw!important;height:100vh!important;background:rgba(6,8,12,.94)!important;z-index:2147483647!important;display:block!important;pointer-events:auto!important";
+function mkDot(xvw,yvw,clickable){
+  const d=document.createElement("div");
+  d.style.cssText="position:fixed;width:34px;height:34px;border-radius:50%;background:#ff5470;border:3px solid #fff;"+
+    "transform:translate(-50%,-50%);display:flex;align-items:center;justify-content:center;font:700 11px -apple-system,Arial;"+
+    "color:#fff;z-index:2147483647;"+(clickable?"cursor:pointer;":"pointer-events:none;")+"left:"+xvw+"vw;top:"+yvw+"vh";
+  return d;
+}
 function startCal(){
+  console.log("[BoringUX] startCal fired");
   S.calibrating=true;
-  cal.style.display="block"; cal.querySelectorAll(".bux-caldot").forEach(d=>d.remove());
-  cal.querySelector(".msg").innerHTML='Click each red dot <b>4 times</b> while looking at it. <small>13 points, then an accuracy check.</small>';
+  cal.style.cssText=CAL_CSS; cal.innerHTML="";
+  const msg=document.createElement("div");
+  msg.style.cssText="position:fixed;top:24px;left:0;right:0;text-align:center;font:15px -apple-system,Arial;color:#fff;z-index:2147483647";
+  msg.innerHTML='Click each red dot <b>4 times</b> while looking at it. <small>13 points, then an accuracy check.</small>';
+  cal.appendChild(msg);
   const pts=[[10,12],[50,12],[90,12],[30,30],[70,30],[10,50],[50,50],[90,50],[30,70],[70,70],[10,88],[50,88],[90,88]];
   let remaining=pts.length;
-  pts.forEach(([x,y])=>{ const d=document.createElement("div"); d.className="bux-caldot";
-    d.style.left=x+"vw"; d.style.top=y+"vh"; let c=0; d.textContent="0/4";
+  pts.forEach(([x,y])=>{ const d=mkDot(x,y,true); let c=0; d.textContent="0/4";
     d.onclick=()=>{ const r=d.getBoundingClientRect(); eng("calibrate",{x:r.left+r.width/2, y:r.top+r.height/2});
-      c++; d.textContent=c+"/4"; if(c>=4){ d.classList.add("done"); d.style.pointerEvents="none";
+      c++; d.textContent=c+"/4"; if(c>=4){ d.style.background="#37d67a"; d.style.color="#04210f"; d.style.pointerEvents="none";
       if(--remaining===0) setTimeout(validate,300); } };
     cal.appendChild(d); });
 }
 async function validate(){
-  cal.querySelectorAll(".bux-caldot").forEach(d=>d.remove());
-  cal.querySelector(".msg").innerHTML='<b>Accuracy check</b> — just LOOK at each dot.';
+  cal.innerHTML="";
+  const msg=document.createElement("div");
+  msg.style.cssText="position:fixed;top:24px;left:0;right:0;text-align:center;font:15px -apple-system,Arial;color:#fff;z-index:2147483647";
+  msg.innerHTML='<b>Accuracy check</b> — just LOOK at each dot.'; cal.appendChild(msg);
   const vpts=[[25,25],[75,25],[25,75],[75,75]], errs=[];
-  for(const [vx,vy] of vpts){ const d=document.createElement("div"); d.className="bux-caldot";
-    d.style.left=vx+"vw"; d.style.top=vy+"vh"; d.style.pointerEvents="none"; d.textContent="👁"; cal.appendChild(d);
+  for(const [vx,vy] of vpts){ const d=mkDot(vx,vy,false); d.textContent="👁"; cal.appendChild(d);
     await sleep(700); const tx=vx/100*innerWidth, ty=vy/100*innerHeight, s=[];
     for(let i=0;i<12;i++){ await sleep(100); if(S.lastGx!=null) s.push(Math.hypot(S.lastGx-tx,S.lastGy-ty)); }
     if(s.length){ s.sort((a,b)=>a-b); errs.push(s[s.length>>1]); } d.remove(); }

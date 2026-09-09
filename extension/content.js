@@ -85,7 +85,7 @@ window.addEventListener("message", e=>{
   if(d.evt==="gaze") onGaze({x:d.x,y:d.y});
   else if(d.evt==="ready"){ if(S._engWait){ S._engWait.res(); S._engWait=null; } }
   else if(d.evt==="error"){ if(S._engWait){ S._engWait.rej(new Error(d.msg||"engine error")); S._engWait=null; } }
-  else if(d.evt==="face"){ if(!S.recording && !S.calibrated){ $("bux-region").textContent = d.ok ? "face ✓" : "no face";
+  else if(d.evt==="face"){ if(!S.recording && !S.calibrated && !S.calibrating){ $("bux-region").textContent = d.ok ? "face ✓" : "no face";
     setHint(d.ok ? "Face detected ✓ — now click ‘Calibrate gaze’. The dot appears after calibration." : "No face detected — center your face and check lighting."); } }
 });
 
@@ -127,6 +127,7 @@ $("bux-cam").onclick = async () => {
 /* ---------- calibration + validation ---------- */
 $("bux-cal-btn").onclick = startCal;
 function startCal(){
+  S.calibrating=true;
   cal.style.display="block"; cal.querySelectorAll(".bux-caldot").forEach(d=>d.remove());
   cal.querySelector(".msg").innerHTML='Click each red dot <b>4 times</b> while looking at it. <small>13 points, then an accuracy check.</small>';
   const pts=[[10,12],[50,12],[90,12],[30,30],[70,30],[10,50],[50,50],[90,50],[30,70],[70,70],[10,88],[50,88],[90,88]];
@@ -147,7 +148,7 @@ async function validate(){
     await sleep(700); const tx=vx/100*innerWidth, ty=vy/100*innerHeight, s=[];
     for(let i=0;i<12;i++){ await sleep(100); if(S.lastGx!=null) s.push(Math.hypot(S.lastGx-tx,S.lastGy-ty)); }
     if(s.length){ s.sort((a,b)=>a-b); errs.push(s[s.length>>1]); } d.remove(); }
-  cal.style.display="none"; S.calibrated=true;
+  cal.style.display="none"; S.calibrated=true; S.calibrating=false;
   S.accuracyPx = errs.length?Math.round(errs.reduce((a,b)=>a+b,0)/errs.length):null;
   setHint("Calibrated ✓ accuracy ≈ "+(S.accuracyPx??"?")+"px. Press Start.");
 }

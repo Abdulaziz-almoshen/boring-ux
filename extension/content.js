@@ -5,7 +5,7 @@
 if (window.__boringUX) { window.__boringUX.toggle(); return; }
 
 const S = {
-  recording:false, calibrated:false, accuracyPx:null, startPerf:0, startWall:0,
+  recording:false, calibrated:false, accuracyPx:null, startPerf:0, startWall:0, stream:null,
   gaze:[], mouse:[], events:[], pages:[], lastGx:null, lastGy:null, lastRegion:null, lastGazeT:0,
   regionTime:{L:0,C:0,R:0}, recorders:[], chunks:{face:[],audio:[],screen:[]}, recentClicks:[],
   lastMouse:0, sw:0, lastDir:0, dirChanges:0, dirWinStart:0, maxScroll:0
@@ -76,17 +76,36 @@ $("bux-cam-view").onclick = () => {
 };
 $("bux-dot-toggle").onchange = e => { S.showDot = e.target.checked; if(!S.showDot) dot.style.display="none"; };
 S.showDot = true;
+
+/* ---------- engine bridge (MediaPipe runs in the page MAIN world) ---------- */
+function eng(cmd, extra){ window.postMessage(Object.assign({source:"bux-content",cmd},extra||{}),"*"); }
+window.addEventListener("message", e=>{
+  if(e.source!==window || !e.data || e.data.source!=="bux-engine") return;
+  const d=e.data;
+  if(d.evt==="gaze") onGaze({x:d.x,y:d.y});
+  else if(d.evt==="ready"){ if(S._engWait){ S._engWait.res(); S._engWait=null; } }
+  else if(d.evt==="error"){ if(S._engWait){ S._engWait.rej(new Error(d.msg||"engine error")); S._engWait=null; } }
+});
+
 $("bux-cam").onclick = async () => {
   $("bux-cam").disabled=true; $("bux-cam").textContent="Starting…";
   try{
-    if(!window.BUXGaze){ alert("Gaze engine not loaded"); return; }
     setHint("Loading eye-tracking model… (first time can take a few seconds)");
-    S.camTrack = await BUXGaze.startCamera();   // MediaPipe iris + head-pose engine
-    BUXGaze.onGaze = onGaze;
+    // Camera lives here (isolated world); MediaPipe reads the same <video> from the main world.
+    S.stream = await navigator.mediaDevices.getUserMedia({video:{width:640,height:480,facingMode:"user"},audio:false});
+    S.camTrack = S.stream.getVideoTracks()[0];
+    let v=document.getElementById("bux-mp-video");
+    if(!v){ v=document.createElement("video"); v.id="bux-mp-video"; v.autoplay=true; v.playsInline=true; v.muted=true; document.documentElement.appendChild(v); }
+    v.srcObject=S.stream; try{ await v.play(); }catch(_){}
+    await new Promise((res,rej)=>{ S._engWait={res,rej};
+      eng("init",{base: chrome.runtime.getURL("vendor/mediapipe/")});
+      setTimeout(()=>{ if(S._engWait){ S._engWait=null; rej(new Error("model load timed out — see console")); } },25000);
+    });
     S.camReady=true;
     $("bux-cam").textContent="Camera on ✓"; $("bux-cal-btn").disabled=false; $("bux-start").disabled=false; $("bux-cam-view").disabled=false;
     dot.style.display="block"; setHint("Face hidden by default. Calibrate, then Start. (Camera still records to face.webm.)");
   }catch(e){
+    try{ if(S.stream) S.stream.getTracks().forEach(t=>t.stop()); }catch(_){} S.stream=null;
     $("bux-cam").disabled=false; $("bux-cam").textContent="Enable camera";
     // Distinguish site-policy block from a normal permission/in-use error
     let policyBlocked=false;
@@ -111,7 +130,7 @@ function startCal(){
   let remaining=pts.length;
   pts.forEach(([x,y])=>{ const d=document.createElement("div"); d.className="bux-caldot";
     d.style.left=x+"vw"; d.style.top=y+"vh"; let c=0; d.textContent="0/4";
-    d.onclick=()=>{ const r=d.getBoundingClientRect(); try{ window.BUXGaze&&BUXGaze.calibrate(r.left+r.width/2, r.top+r.height/2); }catch(_){}
+    d.onclick=()=>{ const r=d.getBoundingClientRect(); eng("calibrate",{x:r.left+r.width/2, y:r.top+r.height/2});
       c++; d.textContent=c+"/4"; if(c>=4){ d.classList.add("done"); d.style.pointerEvents="none";
       if(--remaining===0) setTimeout(validate,300); } };
     cal.appendChild(d); });
@@ -139,7 +158,7 @@ function ev(o){ if(S.recording){ o.t=Math.round(nowRel()); S.events.push(o); } }
 
 document.addEventListener("click",e=>{ if(!S.recording)return; const el=e.target||{}; const clickable=isClickable(el);
   ev({type:"click",x:e.clientX,y:e.clientY,tag:el.tagName||"",txt:(el.innerText||el.value||"").toString().trim().slice(0,60),clickable,gazeRegion:S.lastRegion||"?"});
-  try{ if(window.BUXGaze) BUXGaze.calibrate(e.clientX,e.clientY); }catch(_){}
+  eng("calibrate",{x:e.clientX,y:e.clientY});
   const now=performance.now(); S.recentClicks.push({x:e.clientX,y:e.clientY,t:now});
   S.recentClicks=S.recentClicks.filter(c=>now-c.t<1200);
   if(S.recentClicks.filter(c=>Math.hypot(c.x-e.clientX,c.y-e.clientY)<40).length>=3){ ev({type:"rage_click",x:e.clientX,y:e.clientY}); S.recentClicks=[]; }
@@ -184,12 +203,13 @@ $("bux-stop").onclick = stop;
 
 // Fully release the camera/mic and tear the gaze engine down — no lingering mirror.
 function killCamera(){
-  try{ window.BUXGaze && BUXGaze.stop(); }catch(e){}
+  try{ eng("stop"); }catch(e){}
+  try{ if(S.stream) S.stream.getTracks().forEach(t=>t.stop()); }catch(e){}
   try{ if(S.camTrack) S.camTrack.stop(); }catch(e){}
   try{ if(S.mic) S.mic.getTracks().forEach(t=>t.stop()); }catch(e){}
-  const mv=document.getElementById("bux-mp-video"); if(mv) mv.remove();
+  const mv=document.getElementById("bux-mp-video"); if(mv){ try{mv.srcObject=null;}catch(_){} mv.remove(); }
   document.documentElement.classList.remove("bux-show-cam");
-  dot.style.display="none"; S.camTrack=null; S.mic=null; S.camReady=false; S.calibrated=false; S.accuracyPx=null;
+  dot.style.display="none"; S.stream=null; S.camTrack=null; S.mic=null; S.camReady=false; S.calibrated=false; S.accuracyPx=null;
 }
 async function stop(){
   if(!S.recording)return; S.recording=false; $("bux-stop").disabled=true; $("bux-status").textContent="saving…";

@@ -468,6 +468,15 @@ class H(BaseHTTPRequestHandler):
             job = dict(id=jid, folder=folder, product=body.get("product") or "", status="queued", stage="queued", stage_label="Queued",
                        progress=0.0, eta_s=None, video_s=None, log=[], error=None, report_pdf=None, report_html=None, warnings=[],
                        created=now(), updated=now(), stage_index=0, files_ready=False)
+            # from_stage: re-run only part of the pipeline on an already-analysed session (e.g. "fill" after switching the writer model)
+            names = [s[0] for s in STAGES]
+            if body.get("from_stage") in names and os.path.isdir(os.path.join(folder, "analysis")):
+                job.update(stage_index=names.index(body["from_stage"]), files_ready=True, video_s=round(video_seconds(folder), 1))
+                try:
+                    q = json.load(open(os.path.join(folder, "analysis", "quality.json")))
+                    job["quality"] = dict(tier=q.get("click_consistency", {}).get("tier"), usable=q.get("gaze_usable_frac"), flags=q.get("flags"), moments=q.get("moments"))
+                except Exception:  # noqa: BLE001
+                    pass
             with LOCK:
                 JOBSTATE[jid] = job; CTRL[jid] = {"pause": False, "cancel": False, "proc": None}
             save(job); WAKE.set()

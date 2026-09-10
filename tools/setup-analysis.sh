@@ -7,8 +7,9 @@ set -euo pipefail
 # Lives in ~/.boring-ux (NOT Desktop/Documents/Downloads: macOS blocks background services from those folders).
 DIR="${BUX_AI_DIR:-$HOME/.boring-ux}"
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-WITH_WHISPER=0; WITH_DAEMON=0
-for a in "$@"; do case "$a" in --with-whisper) WITH_WHISPER=1;; --with-daemon) WITH_DAEMON=1;; --all) WITH_WHISPER=1; WITH_DAEMON=1;; esac; done
+WITH_WHISPER=0; WITH_DAEMON=0; WITH_LLM=0
+LLM_MODEL="${BUX_LLM_MODEL:-gemma3:12b}"          # local report writer (≈8 GB); never a cloud model
+for a in "$@"; do case "$a" in --with-whisper) WITH_WHISPER=1;; --with-daemon) WITH_DAEMON=1;; --with-llm) WITH_LLM=1;; --all) WITH_WHISPER=1; WITH_DAEMON=1; WITH_LLM=1;; esac; done
 mkdir -p "$DIR/models"; cd "$DIR"
 echo "▶ Boring UX analysis env → $DIR"
 
@@ -46,6 +47,14 @@ import torch, mediapipe, av, cv2, numpy
 from l2cs import getArch
 print(f"  torch {torch.__version__} (MPS={torch.backends.mps.is_available()}) · mediapipe {mediapipe.__version__} · opencv {cv2.__version__} · numpy {numpy.__version__} · av {av.__version__} · l2cs OK")
 EOF
+if [ "$WITH_LLM" = 1 ]; then
+  echo "▶ Local report-writing model ($LLM_MODEL via Ollama — runs on this Mac, no cloud, no API key)"
+  command -v ollama >/dev/null 2>&1 || brew install ollama
+  if ! curl -fsS http://127.0.0.1:11434/api/tags >/dev/null 2>&1; then
+    (ollama serve >/dev/null 2>&1 &) ; for i in 1 2 3 4 5 6 7 8 9 10; do curl -fsS http://127.0.0.1:11434/api/tags >/dev/null 2>&1 && break; sleep 1; done
+  fi
+  ollama list 2>/dev/null | grep -q "^${LLM_MODEL%%:*}" || ollama pull "$LLM_MODEL"     # ≈8 GB, one time
+fi
 if [ "$WITH_DAEMON" = 1 ]; then
   echo "▶ Local processing service (launch agent, starts at login)"
   bash "$REPO/tools/install-daemon.sh"

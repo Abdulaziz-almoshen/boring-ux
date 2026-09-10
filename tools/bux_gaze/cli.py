@@ -63,7 +63,13 @@ def run(args):
     video = F.prepare_video(session, out_dir)
     srt, tflags = transcribe(session, out_dir, args.whisper_model, args.lang); flags += tflags
     transcript = F.load_transcript(session, out_dir)
-    log(f"transcript: {len(transcript) if transcript else 0} segments" + (" (missing — pass --whisper-model)" if not transcript else ""))
+    if transcript is None:
+        log("transcript: missing (no transcript.srt — pass --whisper-model to transcribe audio.webm)")
+    elif not transcript:
+        log("transcript: file present but 0 speech segments (silence / whisper hallucinations filtered) — participant did not talk")
+        flags.append("no_speech")
+    else:
+        log(f"transcript: {len(transcript)} speech segments")
 
     # 3–4 models + extraction
     face = FaceModel(); gaze = GazeModel(device=args.device, fp16=not args.no_fp16)

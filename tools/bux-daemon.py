@@ -498,6 +498,9 @@ def verify_findings(mapping, speech_text, no_speech):
         keep = [re.sub(r"<h3>\s*(?:ID|[A-Z]\d*)?\s*·", f"<h3>{prefix}{i+1} ·", b, count=1) for i, b in enumerate(keep)]   # sequential IDs, no literal "ID"
         dropped += len(blocks) - len(keep)
         mapping[key] = "\n".join(keep) if keep else "<p>No evidence for this tier in this session.</p>"
+    for key in list(mapping):                                           # finding blocks only belong in the four finding placeholders
+        if key not in ("FINDINGS_P0", "FINDINGS_P1", "FINDINGS_P2", "DELIGHTERS") and isinstance(mapping[key], str) and '<div class="finding">' in mapping[key]:
+            mapping[key] = re.sub(r'<div class="finding">.*?</div>\s*</div>', "", mapping[key], flags=re.S).strip() or "no evidence"
     rows = re.findall(r"<tr>.*?</tr>", mapping.get("GRADE_TABLE") or "", re.S); out = []; cited = set()
     for r in rows:
         cells = re.findall(r"<td>(.*?)</td>", r, re.S)
@@ -561,7 +564,7 @@ def stage_fill(job):
             if gname.startswith("appendix"):      # translation only: no evidence pack needed (was 15k prompt tokens per pass)
                 prompt = (TRANSLATE_RULES + f"\nPLACEHOLDERS (return all {len(gnames)} keys): {json.dumps(gnames)}\n{extra}\n")
             else:
-                prompt = (FILL_RULES_LOCAL + f"\n\nWORDING TIER: {tier}\nPLACEHOLDERS (return all {len(gnames)} keys): {json.dumps(gnames)}\n{extra}\n\n" + pack)
+                prompt = (FILL_RULES_LOCAL + f"\n\nWORDING TIER: {tier}{" — this session is click-validated: write firm columns/halves and do NOT use the words estimated or unvalidated anywhere" if tier == "regions" else ""}\nPLACEHOLDERS (return all {len(gnames)} keys): {json.dumps(gnames)}\n{extra}\n\n" + pack)
             cap = CAPS.get(gname, 1500)
             open(os.path.join(A, f"fill-prompt-{gname}.txt"), "w", encoding="utf-8").write(prompt)
             got = {}
@@ -612,6 +615,14 @@ def stage_fill(job):
     speech_text = " ".join(a.get("speech", "") for a in (RD.get("appendix") or []) if a.get("speech") and a["speech"] != "(no transcript)")
     no_speech = "no_speech" in (RD.get("flags") or []) or not speech_text.strip()
     dropped, blanked = verify_findings(mapping, speech_text, no_speech)
+    if tier == "regions":                                               # validated session: the model must not hedge with the weaker tiers' wording
+        for k_, v_ in mapping.items():
+            if isinstance(v_, str):
+                mapping[k_] = re.sub(r"\s*\(?estimated\)?\s*\(unvalidated\)|\bestimated \(unvalidated\)\b|\bunvalidated\b", "", v_)
+    elif tier == "likely":
+        for k_, v_ in mapping.items():
+            if isinstance(v_, str):
+                mapping[k_] = v_.replace("estimated (unvalidated)", "likely")
     if dropped or blanked:
         msg = f"verifier: removed {dropped} finding(s) with quotes not in the transcript, blanked {blanked} grade row(s)"
         logj(job, msg); job.setdefault("warnings", []).append(msg)

@@ -32,8 +32,8 @@ A single report (PDF + web page) with an overall grade, a journey map with the e
 
 ## Good to know
 
-- **Talk aloud.** Speech is half the evidence. A silent session gives a much thinner report.
-- **Keep the tab in front** while recording — eye tracking pauses when the tab is hidden.
+- **Talk aloud.** Speech is half the evidence. A silent session gives a much thinner report. While recording you see a **mic level bar and live captions**, so you know the microphone is working.
+- **Keep the tab in front** while recording — the camera freezes when the tab is hidden, and those seconds are reported as *tab switched*, not as attention.
 - **Webcam eye tracking is about regions, not pixels.** It reliably tells left / center / right and up / down, and when someone looks away — not which of two neighboring buttons. The report is honest about this on every page.
 - **Press "Sign self-test"** once per session (8 seconds) so the analysis can prove it has left and right the right way round.
 

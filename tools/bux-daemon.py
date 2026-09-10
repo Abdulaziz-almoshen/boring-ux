@@ -194,11 +194,14 @@ If evidence is thin (no speech, no clicks), say so plainly inside the relevant p
 # BUX_LLM = auto | ollama | claude | none.  Default "auto" = local Ollama when a model is present, otherwise "none"
 # (data report with the judgment sections marked as not written). Claude is used ONLY when explicitly requested.
 OLLAMA = os.environ.get("BUX_OLLAMA_URL", "http://127.0.0.1:11434")
-OLLAMA_MODEL = os.environ.get("BUX_LLM_MODEL", "gemma3:12b")
+# Preferred local writers, best first. BUX_LLM_MODEL pins one; otherwise the first one already pulled is used.
+PREFERRED = [m for m in [os.environ.get("BUX_LLM_MODEL")] if m] + ["gemma3:12b", "qwen3:14b", "qwen2.5:14b", "gemma3:27b", "qwen3:8b", "llama3.1:8b", "qwen2.5:7b"]
+OLLAMA_MODEL = PREFERRED[0]
 
 
 def ollama_ready(start=True):
-    """True if the Ollama server answers and the configured model is pulled; starts the server if needed."""
+    """(ok, note). Starts the Ollama server if needed and picks the first preferred model that is pulled."""
+    global OLLAMA_MODEL
     import urllib.request
     def tags():
         with urllib.request.urlopen(OLLAMA + "/api/tags", timeout=3) as r:
@@ -217,17 +220,22 @@ def ollama_ready(start=True):
                 continue
         else:
             return False, "ollama did not start"
-    ok = any(m == OLLAMA_MODEL or m.split(":")[0] == OLLAMA_MODEL.split(":")[0] for m in models)
-    return ok, ("ok" if ok else f"model {OLLAMA_MODEL} not pulled (have: {', '.join(models) or 'none'})")
+    have = {m: m for m in models} | {m.split(":")[0]: m for m in models}
+    for want in PREFERRED:
+        hit = have.get(want) or have.get(want.split(":")[0])
+        if hit:
+            OLLAMA_MODEL = hit
+            return True, "ok"
+    return False, f"none of {', '.join(PREFERRED[:3])} is pulled (have: {', '.join(models) or 'none'})"
 
 
-def llm_status():
+def llm_status(start=False):
     mode = os.environ.get("BUX_LLM", "auto")
     if mode == "claude":
         return dict(backend="claude", model=os.environ.get("BUX_CLAUDE_MODEL", "claude-opus-5"), available=bool(which("claude")))
     if mode == "none":
         return dict(backend="none", model=None, available=True)
-    ok, why = ollama_ready(start=False)
+    ok, why = ollama_ready(start=start)
     if ok or mode == "ollama":
         return dict(backend="ollama", model=OLLAMA_MODEL, available=ok, note=None if ok else why)
     return dict(backend="none", model=None, available=True, note="no local model — " + why)
@@ -235,7 +243,7 @@ def llm_status():
 
 def write_with_ollama(job, prompt, est, t0):
     import urllib.request, math as _m
-    body = json.dumps(dict(model=OLLAMA_MODEL, stream=False, format="json",
+    body = json.dumps(dict(model=OLLAMA_MODEL, stream=False, format="json", think=False,   # think=False: Qwen3 must not emit <think> preambles
                            options=dict(num_ctx=32768, temperature=0.2, num_predict=8192),
                            messages=[dict(role="user", content=prompt)])).encode()
     req = urllib.request.Request(OLLAMA + "/api/chat", data=body, headers={"Content-Type": "application/json"}, method="POST")
@@ -243,7 +251,8 @@ def write_with_ollama(job, prompt, est, t0):
     def run():
         try:
             with urllib.request.urlopen(req, timeout=3600) as r:
-                result["out"] = json.loads(r.read()).get("message", {}).get("content", "")
+                txt = json.loads(r.read()).get("message", {}).get("content", "")
+                result["out"] = re.sub(r"<think>.*?</think>", "", txt, flags=re.S).strip()   # defensive: drop any reasoning preamble
         except Exception as e:  # noqa: BLE001
             result["err"] = str(e)
     th = threading.Thread(target=run, daemon=True); th.start()
@@ -293,7 +302,7 @@ def stage_fill(job):
     A = os.path.join(job["folder"], "analysis"); scaffold = os.path.join(A, "report-scaffold.html")
     html = open(scaffold, encoding="utf-8").read()
     names = sorted(set(re.findall(r"\{\{([A-Z_]+(?:_\d+)?)\}\}", html)))
-    st = llm_status(); job["llm"] = st; save(job)
+    st = llm_status(start=True); job["llm"] = st; save(job)     # start Ollama if it isn't running
     if st["backend"] == "none" or not st["available"]:
         job.setdefault("warnings", []).append("findings not written: " + (st.get("note") or "no report-writing model available"))
         out = re.sub(r"<h2>Overall grade</h2>", NOT_WRITTEN + "<h2>Overall grade</h2>", html, count=1)

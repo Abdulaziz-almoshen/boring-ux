@@ -53,7 +53,11 @@ if [ "$WITH_LLM" = 1 ]; then
   if ! curl -fsS http://127.0.0.1:11434/api/tags >/dev/null 2>&1; then
     (ollama serve >/dev/null 2>&1 &) ; for i in 1 2 3 4 5 6 7 8 9 10; do curl -fsS http://127.0.0.1:11434/api/tags >/dev/null 2>&1 && break; sleep 1; done
   fi
-  ollama list 2>/dev/null | grep -q "^${LLM_MODEL%%:*}" || ollama pull "$LLM_MODEL"     # ≈8 GB, one time
+  if ollama list 2>/dev/null | grep -qE "^(gemma3|qwen3|qwen2\.5|llama3\.1)[:[:space:]]"; then
+    echo "  a suitable local model is already installed — skipping the download"
+  else
+    ollama pull "$LLM_MODEL"                                                              # ≈8 GB, one time
+  fi
 fi
 if [ "$WITH_DAEMON" = 1 ]; then
   echo "▶ Local processing service (launch agent, starts at login)"

@@ -57,6 +57,8 @@ panel.innerHTML = `<h4>😴 Boring UX <small>any-site</small></h4>
  <button class="stop" id="bux-stop" disabled>■ Stop &amp; save</button>
  <div class="row"><span>Region</span><b id="bux-region">—</b></div>
  <div class="row"><span>Gaze</span><b id="bux-status">idle</b></div>
+ <div class="row"><span>Mic</span><b id="bux-mic" style="font-weight:500">—</b></div>
+ <div id="bux-cap" style="font-size:11px;color:#cfd6e4;min-height:14px;margin-top:2px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis"></div>
  <div style="font-size:11px;color:#8a94a6;margin-top:6px" id="bux-hint">Enable camera → Calibrate → Start. Stay on this tab while recording.</div>
  <div id="bux-proc">
    <div class="stage" id="bux-proc-stage">Processing…</div>
@@ -201,7 +203,7 @@ window.addEventListener("scroll",()=>{ if(!S.recording)return; const y=scrollY||
 function announce(){ if(!S.recording)return; const p={type:"page",url:location.href,title:document.title}; ev(p); S.pages.push({url:location.href,title:document.title,startT:Math.round(nowRel()),endT:null}); }
 ["pushState","replaceState"].forEach(m=>{ const o=history[m]; history[m]=function(){ const r=o.apply(this,arguments); setTimeout(announce,0); return r; }; });
 addEventListener("popstate",announce);
-document.addEventListener("visibilitychange",()=>{ if(!S.recording)return; if(document.hidden){ ev({type:"tracking_paused"}); } else { ev({type:"tracking_resumed"}); alert("Boring UX: eye tracking paused while the tab was hidden — gaze has a gap."); }});
+document.addEventListener("visibilitychange",()=>{ if(!S.recording)return; if(document.hidden){ ev({type:"tracking_paused"}); } else { ev({type:"tracking_resumed"}); setHint("⚠ The tab was hidden — the camera freezes while this tab is not in front. Stay on this tab while recording."); alert("Boring UX: eye tracking paused while the tab was hidden — gaze has a gap."); }});
 
 /* ---------- record ---------- */
 function mime(){ return ["video/webm;codecs=vp9,opus","video/webm;codecs=vp8,opus","video/webm"].find(m=>MediaRecorder.isTypeSupported(m))||""; }
@@ -209,6 +211,7 @@ $("bux-start").onclick = async () => {
   if(!S.camReady){ alert("Enable camera first"); return; }
   if(!S.calibrated && !confirm("Gaze not calibrated — accuracy will be poor. OK = record anyway, Cancel = calibrate.")){ startCal(); return; }
   try{ S.mic = await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true}}); }catch(e){ S.mic=null; }
+  startMicMeter();
   let screen=null;
   if(confirm("Also record the SCREEN? (OK = pick this tab to share; Cancel = gaze+face+audio only)")){
     try{ screen = await navigator.mediaDevices.getDisplayMedia({video:{frameRate:15},audio:false}); }catch(e){}
@@ -230,6 +233,39 @@ $("bux-start").onclick = async () => {
 };
 $("bux-stop").onclick = stop;
 
+/* ---------- mic level meter + live captions (local whisper via the service) ---------- */
+function startMicMeter(){
+  $("bux-cap").textContent=""; S.captions=[]; S.micStats={peakDb:-100,talkSec:0,samples:0};
+  if(!S.mic){ $("bux-mic").textContent="no microphone"; return; }
+  try{
+    const ctx=new (window.AudioContext||window.webkitAudioContext)(); const src=ctx.createMediaStreamSource(S.mic);
+    const an=ctx.createAnalyser(); an.fftSize=1024; src.connect(an);
+    const proc=ctx.createScriptProcessor(4096,1,1); const mute=ctx.createGain(); mute.gain.value=0; src.connect(proc); proc.connect(mute); mute.connect(ctx.destination);
+    S._audio={ctx,an,proc}; S._pcm=[]; S._pcmT0=nowRel();
+    proc.onaudioprocess=e=>{ if(!S.recording)return; S._pcm.push(new Float32Array(e.inputBuffer.getChannelData(0))); if(nowRel()-S._pcmT0>=8000) flushCaption(); };
+    const buf=new Float32Array(an.fftSize);
+    S._micTimer=setInterval(()=>{ an.getFloatTimeDomainData(buf); let s=0; for(let i=0;i<buf.length;i++) s+=buf[i]*buf[i];
+      const db=20*Math.log10(Math.sqrt(s/buf.length)+1e-9); const st=S.micStats; st.samples++; if(db>st.peakDb) st.peakDb=db;
+      const talking=db>-45; if(talking) st.talkSec+=0.1; const pct=Math.max(0,Math.min(100,(db+60)*100/55));
+      $("bux-mic").innerHTML=`<span style="display:inline-block;width:70px;height:8px;border-radius:4px;background:linear-gradient(90deg,${talking?"#2ecc71":"#4f8cff"} ${pct}%,#2a3244 ${pct}%);vertical-align:middle;margin-right:6px"></span>${talking?"talking":"quiet"}`;
+      if(st.samples===250 && st.talkSec<1) setHint("⚠ No voice picked up in 25 s — check the microphone (System Settings → Sound → Input) or speak louder."); },100);
+  }catch(e){ $("bux-mic").textContent="meter unavailable"; }
+}
+async function flushCaption(){
+  const chunks=S._pcm||[]; S._pcm=[]; const t0=S._pcmT0; S._pcmT0=nowRel(); if(!chunks.length||!S._audio)return;
+  const sr=S._audio.ctx.sampleRate; let n=0; for(const c of chunks)n+=c.length; const all=new Float32Array(n); let o=0; for(const c of chunks){ all.set(c,o); o+=c.length; }
+  let peak=0; for(let i=0;i<all.length;i+=8) peak=Math.max(peak,Math.abs(all[i])); if(20*Math.log10(peak+1e-9)<-50)return;   // silence: skip whisper
+  const ratio=sr/16000, m=Math.floor(all.length/ratio), out=new Int16Array(m);
+  for(let i=0;i<m;i++){ const a=Math.floor(i*ratio), b=Math.min(all.length,Math.floor((i+1)*ratio)); let s=0; for(let k=a;k<b;k++)s+=all[k]; const v=s/Math.max(1,b-a); out[i]=Math.max(-32768,Math.min(32767,Math.round(v*32767))); }
+  try{ const r=await fetch(`http://127.0.0.1:7331/transcribe?t0=${Math.round(t0)}`,{method:"POST",headers:{"Content-Type":"application/octet-stream"},body:out.buffer}); const j=await r.json();
+    if(j&&j.text){ S.captions.push({t0:Math.round(t0),t1:Math.round(nowRel()),text:j.text,lang:j.lang}); $("bux-cap").textContent="🎙 "+j.text; } }catch(e){}
+}
+async function stopMicMeter(){
+  try{ clearInterval(S._micTimer); }catch(e){}
+  try{ await flushCaption(); }catch(e){}
+  try{ if(S._audio){ S._audio.proc.disconnect(); S._audio.ctx.close(); } }catch(e){} S._audio=null;
+}
+
 // Fully release the camera/mic and tear WebGazer down — no lingering mirror.
 function killCamera(){
   try{ if(window.webgazer){ webgazer.clearGazeListener&&webgazer.clearGazeListener(); webgazer.pause&&webgazer.pause(); webgazer.end&&webgazer.end(); } }catch(e){}
@@ -242,6 +278,7 @@ function killCamera(){
 }
 async function stop(){
   if(!S.recording)return; S.recording=false; $("bux-stop").disabled=true; $("bux-status").textContent="saving…";
+  await stopMicMeter();
   // 1) stop every recorder and release ALL its tracks
   await Promise.all(S.recorders.map(r=>new Promise(res=>{ if(r.state==="inactive")return res(); r.onstop=res; try{r.stop();}catch(e){res();} })));
   S.recorders.forEach(r=>{ try{ r.stream.getTracks().forEach(t=>t.stop()); }catch(e){} });
@@ -261,6 +298,7 @@ async function stop(){
   files["events.csv"]=txt(csv(["t_ms","type","detail","gazeRegion","extra","x","y","clickable","rect"],
     S.events.map(e=>[e.t,e.type,e.txt||e.title||e.note||"",e.gazeRegion||"",e.url||e.pct||"",e.x??"",e.y??"",e.clickable===undefined?"":(e.clickable?1:0),e.rect?e.rect.join(" "):""])));
   files["session.json"]=txt(JSON.stringify(summary(),null,2));
+  if((S.captions||[]).length) files["captions.jsonl"]=txt(S.captions.map(c=>JSON.stringify(c)).join("\n"));
   files["SESSION-AI.md"]=txt(aiBundle());
   if(S.chunks.face.length) files["face.webm"]=new Blob(S.chunks.face,{type:m});
   if(S.chunks.audio.length) files["audio.webm"]=new Blob(S.chunks.audio,{type:"audio/webm"});
@@ -357,6 +395,7 @@ function summary(){ const g=S.regionTime, gt=g.L+g.C+g.R||1;
     viewport:{stageW:innerWidth,stageH:innerHeight,winW:innerWidth,winH:innerHeight},
     screen:{width:screen.width,height:screen.height,availHeight:screen.availHeight}, dpr:devicePixelRatio,
     window:{screenX,screenY,outerWidth,outerHeight,innerWidth,innerHeight},
+    mic:S.micStats?{peakDb:+S.micStats.peakDb.toFixed(1),talkSec:+S.micStats.talkSec.toFixed(1)}:null, liveCaptions:(S.captions||[]).length,
     totals:{pages:S.pages.length,gazeSamples:S.gaze.length,mouseSamples:S.mouse.length,clicks:S.events.filter(e=>e.type==="click").length},
     gazeDistribution:{left:+(g.L/gt*100).toFixed(1),center:+(g.C/gt*100).toFixed(1),right:+(g.R/gt*100).toFixed(1)},
     events:S.events }; }

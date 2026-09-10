@@ -136,6 +136,38 @@ def run_proc(job, cmd, on_line=None, timeout=3600):
     return p.returncode, tail
 
 
+TRANSCRIBE_LOCK = threading.Lock()
+
+
+def transcribe_pcm(raw, lang="auto"):
+    """Live captions for the extension: int16 16 kHz mono PCM → whisper.cpp (VAD-gated) → {text, lang, p, ms}."""
+    import tempfile, wave
+    t0 = now()
+    models = sorted(f for f in glob.glob(os.path.join(AI, "models", "ggml-*.bin")) if "silero" not in f)
+    if not models or not which("whisper-cli"):
+        return dict(text="", lang=None, p=0, error="whisper not installed")
+    vad = os.path.join(AI, "models", "ggml-silero-v5.1.2.bin")
+    with tempfile.TemporaryDirectory() as d:
+        wav = os.path.join(d, "c.wav")
+        with wave.open(wav, "wb") as w:
+            w.setnchannels(1); w.setsampwidth(2); w.setframerate(16000); w.writeframes(raw)
+        cmd = ["whisper-cli", "-m", models[0], "-f", wav, "-l", lang, "-bs", "5", "-nt", "-of", os.path.join(d, "o"), "-otxt"]
+        if os.path.exists(vad):
+            cmd += ["--vad", "-vm", vad, "-vt", "0.5", "-vspd", "250", "-vsd", "300", "-vp", "200"]
+        with TRANSCRIBE_LOCK:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        txt = ""
+        try:
+            txt = open(os.path.join(d, "o.txt"), encoding="utf-8").read()
+        except Exception:  # noqa: BLE001
+            pass
+    m = re.search(r"auto-detected language: (\w+) \(p = ([\d.]+)\)", (r.stderr or "") + (r.stdout or ""))
+    txt = " ".join(txt.split())
+    if txt.strip() in ("Thank you.", "اشتركوا في القناة", "ترجمة نانسي قنقر"):
+        txt = ""
+    return dict(text=txt, lang=m.group(1) if m else lang, p=float(m.group(2)) if m else None, ms=int((now() - t0) * 1000))
+
+
 def ollama_unload():
     """Free the writer model (~14 GB resident) before the analysis stage — on a 24 GB Mac both together push the system into swap."""
     try:
@@ -347,7 +379,7 @@ def evidence_pack(A, max_transcript=24000):
 FILL_RULES_LOCAL = """You are a senior UX researcher writing part of a usability report from a moderated think-aloud session with webcam eye tracking.
 Return ONE JSON object. Keys = EXACTLY the placeholder names listed below (all of them, none extra). Values = HTML strings (no markdown).
 Rules: cite evidence as said · eyes · time; quote the transcript verbatim (original language) with [m:ss]; eyes come from the timeline/moments
-(3x3 cells TL,TC,TR,ML,MC,MR,BL,BC,BR; states on_screen/off_left/off_right/down_keyboard/away/no_face); NEVER invent quotes, clicks or events;
+(3x3 cells TL,TC,TR,ML,MC,MR,BL,BC,BR; states on_screen/off_left/off_right/down_keyboard/away/no_face/tab_hidden — tab_hidden = the participant switched away from the test tab (camera frozen): it is NOT attention data and never a 'look away'; TAB_SWITCH moments report it); NEVER invent quotes, clicks or events;
 expression cues are cue-level, never emotions as facts. Wording tier: 'regions' = firm columns/halves; 'likely' = say 'likely'; 'unvalidated' =
 every gaze statement says 'estimated (unvalidated)' and findings lean on transcript/mouse/clicks/look-away. If evidence is thin, say so plainly.
 Formats: GRADE_TABLE/ROADMAP_ROWS/ACTION_LIST_ROWS/PLACEMENT_TABLE/PER_NEED_MAP = <tr><td>…</td>…</tr> rows only.
@@ -491,6 +523,16 @@ def stage_fill(job):
             appendix = []
         pack = evidence_pack(A)
         groups = plan_groups(names, appendix)
+        try:
+            n_clicks = int(((json.load(open(os.path.join(A, "report-data.json"), encoding="utf-8")).get("stats") or {}).get("clicks") or 0))
+        except Exception:  # noqa: BLE001
+            n_clicks = 0
+        if n_clicks == 0 and any(g[0] == "timing" for g in groups):
+            for n_ in [n for g in groups if g[0] == "timing" for n in g[1]]:
+                mapping[n_] = ('<tr><td colspan="4">No task clicks in this session — no click evidence to place.</td></tr>' if n_ in ("PLACEMENT_TABLE", "PER_NEED_MAP")
+                               else "No click-latency evidence: the participant made no task clicks in this session.")
+            groups = [g for g in groups if g[0] != "timing"]
+            logj(job, "timing: no clicks in this session — filled deterministically, model pass skipped")
         per = min(900, 120 + len(pack.encode("utf-8")) / 110)          # measured: a 22 KB chunk takes about 5 min on qwen3:14b (M-series GPU)
         job["fill_est_s"] = int(per * len(groups)); save(job)
         for k, (gname, gnames, extra) in enumerate(groups):
@@ -656,6 +698,11 @@ class H(BaseHTTPRequestHandler):
         n = int(self.headers.get("Content-Length") or 0)
         p = self.path.split("?")[0]
         # Raw file upload from the extension: POST /sessions/<name>/<file>  (body = file bytes)
+        if p == "/transcribe":
+            if n > 64 * 1024 * 1024:
+                return self._send(413, dict(error="chunk too large"))
+            raw = self.rfile.read(n); q = dict(kv.split("=", 1) for kv in self.path.split("?", 1)[1].split("&") if "=" in kv) if "?" in self.path else {}
+            return self._send(200, transcribe_pcm(raw, q.get("lang", "auto")))
         m = re.match(r"^/sessions/([A-Za-z0-9._\-]{1,120})/([A-Za-z0-9._\-]{1,80})$", p)
         if m:
             if n > MAX_UPLOAD:

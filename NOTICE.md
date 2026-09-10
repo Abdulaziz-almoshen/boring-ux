@@ -7,6 +7,7 @@ Boring UX is MIT-licensed. It runs these third-party components locally; their l
 - **L2CS-Net** code — MIT (Ahmednull; installed fork edavalosanaya). The bundled **L2CS weights are trained on Gaze360**, whose
   license permits **non-commercial research use only**. If you use Boring UX commercially, replace them or use the MediaPipe-only
   gaze signal.
+- **Qwen3 14B / Qwen 2.5** via Ollama (Apache-2.0, Alibaba) — used instead of Gemma when it is already installed.
 - **WebGazer.js** — GPLv3 (Brown University; LGPLv3 offered to companies under $1M valuation). It is bundled in `extension/`.
 - PyTorch (BSD-3), OpenCV (Apache-2.0), PyAV (BSD-3), ffmpeg (LGPL/GPL, invoked as a separate program).
 

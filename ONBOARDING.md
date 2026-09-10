@@ -25,6 +25,8 @@ Set up Boring UX (open-source webcam eye-tracking usability testing) on this Mac
    After Stop, the panel should switch to a processing view and the report should open automatically when done.
 6. If anything fails, read docs/ and tools/ in the repo to diagnose, fix it, and re-verify. Finish by telling me,
    in plain language, how to run a real usability session and where reports are saved.
+Note: the service runs a staged copy of the repo's tools from ~/.boring-ux/app (macOS blocks background services from
+reading ~/Desktop). Whenever the repo is updated (git pull), re-run: bash tools/install-daemon.sh
 ```
 
 ## What gets installed (all local, nothing leaves your Mac)

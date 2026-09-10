@@ -21,6 +21,9 @@ Browser extension (Chrome/Edge, MV3)                Local processing service (Py
   without a manual Full Disk Access grant. So the service, its env and models live in `~/.boring-ux/`, the extension **uploads**
   each session (`POST /sessions/<name>/<file>`) to `~/.boring-ux/sessions/`, and when the job is done the extension **pulls**
   `report.pdf` back (`GET /jobs/<id>/report.pdf`) and saves it into `Downloads/boring-ux/<name>/` itself.
+  The repo is usually on the Desktop too, so `tools/install-daemon.sh` **stages a copy of `tools/` into `~/.boring-ux/app/`** and
+  the service runs from there — re-run the installer after `git pull`. To process a folder the service can't read (any older
+  recording in Downloads/Desktop), `python3 tools/bux-submit.py <folder> --watch` uploads it and submits the job.
 - The live gaze dot in the panel uses WebGazer.js (region-level). The **report's gaze comes from the recorded video**, analysed offline.
 
 ## The offline analysis (`tools/bux-analyze-video.py`)

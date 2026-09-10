@@ -17,7 +17,8 @@ import urllib.request
 import urllib.error
 
 HOST = os.environ.get("BUX_HOST", "http://127.0.0.1:7331")
-SKIP_SUFFIX = (".b64.bak", ".recovered.webm", ".jpg", ".wav")
+sys.stdout.reconfigure(line_buffering=True)   # progress lines show up immediately even when piped/backgrounded
+SKIP_SUFFIX = (".b64.bak", ".recovered.webm", ".jpg", ".wav", "report.html", "report.pdf")   # outputs, not inputs
 SKIP_DIRS = {"analysis", "debug"}
 
 

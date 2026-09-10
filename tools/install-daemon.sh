@@ -47,6 +47,7 @@ cat > "$PLIST" <<EOF
 EOF
 
 launchctl bootout "gui/$(id -u)" "$PLIST" 2>/dev/null || true
+: > "$AI/logs/daemon.err"; : > "$AI/logs/daemon.log"          # fresh logs per install — stale errors mislead
 launchctl bootstrap "gui/$(id -u)" "$PLIST"
 for i in 1 2 3 4 5 6 7 8 9 10; do
   if curl -fsS "http://127.0.0.1:7331/health" >/dev/null 2>&1; then

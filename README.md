@@ -37,9 +37,4 @@ A single report (PDF + web page) with an overall grade, a journey map with the e
 - **Webcam eye tracking is about regions, not pixels.** It reliably tells left / center / right and up / down, and when someone looks away — not which of two neighboring buttons. The report is honest about this on every page.
 - **Press "Sign self-test"** once per session (8 seconds) so the analysis can prove it has left and right the right way round.
 
-## More
-
-- [ONBOARDING.md](ONBOARDING.md) — the setup prompt for Claude Code
-- [docs/TECHNICAL.md](docs/TECHNICAL.md) — how it works, models and licenses, the analysis pipeline, limitations
-- [docs/GAZE-FROM-VIDEO-DESIGN.md](docs/GAZE-FROM-VIDEO-DESIGN.md) — the full design of the eye-tracking analysis
-- [CONTRIBUTING.md](CONTRIBUTING.md) · [MIT License](LICENSE)
+Open source, [MIT License](LICENSE). Contributions welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).

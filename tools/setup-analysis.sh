@@ -23,8 +23,8 @@ source .venv/bin/activate
 if command -v uv >/dev/null 2>&1; then PIP="uv pip install"; else PIP="pip install -q"; fi
 
 echo "▶ Python packages (pinned set that works together)"
-$PIP "torch>=2.4" "numpy>=2,<3" "scipy>=1.18" "opencv-python<5" "mediapipe==0.10.14" "av>=12" \
-     "git+https://github.com/edavalosanaya/L2CS-Net.git@main"
+$PIP "torch>=2.4" "numpy>=2,<3" "scipy>=1.18" "opencv-python<5" "opencv-contrib-python<5" "mediapipe==0.10.14" "av>=12" \
+     "git+https://github.com/edavalosanaya/L2CS-Net.git@main"      # both opencv packages pinned: mediapipe pulls opencv-contrib and 5.x would shadow 4.x
 
 echo "▶ Models"
 [ -s models/L2CSNet_gaze360.pkl ] || curl -L --progress-bar -o models/L2CSNet_gaze360.pkl \

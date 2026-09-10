@@ -18,16 +18,24 @@ if [ "${1:-}" = "--remove" ]; then
 fi
 [ -x "$PY" ] || { echo "✗ $PY not found — run: bash tools/setup-analysis.sh first"; exit 1; }
 
+# The repo is usually under ~/Desktop (also protected), so the service runs a STAGED COPY of tools/ from $AI/app.
+# Re-run this installer after updating the repo (git pull) to refresh the copy.
+APP="$AI/app"; mkdir -p "$APP"
+rsync -a --delete --exclude '__pycache__' --exclude '*.pyc' "$REPO/tools/" "$APP/tools/"
+cp -f "$REPO/docs/GAZE-FROM-VIDEO-DESIGN.md" "$APP/" 2>/dev/null || true
+echo "  staged tools → $APP/tools"
+
 cat > "$PLIST" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
   <key>Label</key><string>$LABEL</string>
-  <key>ProgramArguments</key><array><string>$PY</string><string>$REPO/tools/bux-daemon.py</string></array>
+  <key>ProgramArguments</key><array><string>$PY</string><string>$APP/tools/bux-daemon.py</string></array>
+  <key>WorkingDirectory</key><string>$APP</string>
   <key>EnvironmentVariables</key><dict>
     <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$HOME/.local/bin</string>
     <key>BUX_AI_DIR</key><string>$AI</string>
-    <key>BUX_REPO</key><string>$REPO</string>
+    <key>BUX_REPO</key><string>$APP</string>
     <key>PYTORCH_ENABLE_MPS_FALLBACK</key><string>1</string>
   </dict>
   <key>RunAtLoad</key><true/>

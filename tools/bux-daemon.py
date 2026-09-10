@@ -356,6 +356,16 @@ use Now / Next / Later. (4) SIGNAL 'Delight' cannot have FRICTION above 30; 'Con
 sentence across placeholders. (6) Prefer specific observed moments (timeline lines, moments list) over general UX advice. Output JSON only."""
 
 
+FINDINGS_GUIDE = """
+=== how to build this part ===
+FINDINGS_P0 = 1-3 blocks (IDs C1, C2…): moments where the participant could not proceed, repeated a step, or said so (MISS_THEN_CORRECT,
+FRUSTRATION, CONFUSION with speech). FINDINGS_P1 = 2-4 blocks (H1…): slowdowns and misreads. FINDINGS_P2 = 1-3 blocks (N1…): polish.
+DELIGHTERS = 1-3 blocks (D1…, class keep, label KEEP): things that clearly worked or were praised. Every block MUST start from one specific
+moment or transcript line in the evidence (its [m:ss] appears in the block); if a tier truly has no evidence, return one short
+<p>No evidence for this tier in this session.</p>. ACTION_LIST_ROWS = one <tr><td>ID</td><td>action</td><td>owner</td><td>priority</td></tr> per block above.
+"""
+
+
 def plan_groups(names, appendix):
     """Split placeholders into focused calls a 14B model can answer well inside its context window."""
     g = lambda pred: [n for n in names if pred(n)]
@@ -364,7 +374,7 @@ def plan_groups(names, appendix):
     fi = g(lambda n: n in ("FINDINGS_P0", "FINDINGS_P1", "DELIGHTERS", "FINDINGS_P2", "ACTION_LIST_ROWS"))
     ti = g(lambda n: n in ("PLACEMENT_TABLE", "PER_NEED_MAP") or re.match(r"^(LATENCY_MEANING|INTENT_READS_AS)_\d+$", n))
     if ov: groups.append(("overview", ov, ""))
-    if fi: groups.append(("findings", fi, ""))
+    if fi: groups.append(("findings", fi, FINDINGS_GUIDE))
     if ti: groups.append(("timing", ti, ""))
     ap = g(lambda n: n.startswith("APPENDIX_ENGLISH_"))
     src = {a["n"]: a["speech"] for a in (appendix or [])}

@@ -136,7 +136,18 @@ def run_proc(job, cmd, on_line=None, timeout=3600):
     return p.returncode, tail
 
 
+def ollama_unload():
+    """Free the writer model (~14 GB resident) before the analysis stage — on a 24 GB Mac both together push the system into swap."""
+    try:
+        import urllib.request as _u
+        body = json.dumps(dict(model=OLLAMA_MODEL or "", keep_alive=0)).encode()
+        _u.urlopen(_u.Request("http://127.0.0.1:11434/api/generate", data=body, headers={"Content-Type": "application/json"}), timeout=10).read()
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def stage_analyze(job):
+    ollama_unload()
     vs = job["video_s"] or 60
     whisper = glob.glob(os.path.join(AI, "models", "ggml-*.bin"))
     cmd = [PY, os.path.join(REPO, "tools", "bux-analyze-video.py"), job["folder"]] + (["--whisper-model", whisper[0]] if whisper else [])
@@ -241,11 +252,11 @@ def llm_status(start=False):
     return dict(backend="none", model=None, available=True, note="no local model — " + why)
 
 
-def write_with_ollama(job, prompt, est, t0, out_dir=None, tag="", pbase=0.0, pspan=1.0, num_ctx=32768):
+def write_with_ollama(job, prompt, est, t0, out_dir=None, tag="", pbase=0.0, pspan=1.0, num_ctx=16384):
     """One chat call to the local model. Saves the raw response (+ token counts) to analysis/fill-response-<tag>.json.
     Progress is reported inside [pbase, pbase+pspan] of the fill stage. Returns (text, err)."""
     import urllib.request, math as _m
-    body = json.dumps(dict(model=OLLAMA_MODEL, stream=False, format="json", think=False,   # think=False: Qwen3 must not emit <think> preambles
+    body = json.dumps(dict(model=OLLAMA_MODEL, stream=False, format="json", keep_alive="3m", think=False,   # think=False: Qwen3 must not emit <think> preambles
                            options=dict(num_ctx=num_ctx, temperature=0.2, num_predict=8192),
                            messages=[dict(role="user", content=prompt)])).encode()
     req = urllib.request.Request(OLLAMA + "/api/chat", data=body, headers={"Content-Type": "application/json"}, method="POST")

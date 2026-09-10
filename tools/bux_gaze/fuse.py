@@ -211,9 +211,12 @@ def load_session_files(session):
         except ValueError:
             return None
     clicks = []
+    PANEL = re.compile(r"^\s*(■\s*Stop|● Start|Enable camera|Calibrate|👀 Sign self-test|show gaze dot|on$|⏸|Pause|Resume|Open report|Camera on|👁 Show camera|🙈 Hide camera)", re.I)
     for e in (events or []):
         if e.get("type") != "click":
             continue
+        if PANEL.match(e.get("detail") or e.get("txt") or ""):
+            continue                                     # older recordings logged clicks on the Boring UX panel itself
         clickable = str(e.get("clickable", "")).strip().lower()
         rect = [float(x) for x in str(e.get("rect", "")).split()] if e.get("rect") else None
         clicks.append(dict(t_ms=float(e["t_ms"]), x=num(e.get("x")), y=num(e.get("y")), text=(e.get("detail") or e.get("txt") or "")[:60],
@@ -232,6 +235,20 @@ def load_transcript(session, out_dir):
     return None
 
 
+def collapse_repeats(text):
+    """Whisper repeats a stuttered clause ("وش هذه الكلمة ما عرفتها؟" ×3): keep one copy of consecutive duplicate clauses."""
+    parts = re.split(r"(?<=[،,؟?.!])\s*", text or "")
+    out, prev = [], None
+    for p in parts:
+        n = re.sub(r"[\s\W]+", "", p).lower()
+        if not n:
+            continue
+        if n != prev:
+            out.append(p.strip())
+        prev = n
+    return " ".join(out) if out else (text or "").strip()
+
+
 def parse_srt(txt):
     segs = []
     for blk in re.split(r"\n\s*\n", txt.strip()):
@@ -245,7 +262,7 @@ def parse_srt(txt):
         a = (g[0] * 3600 + g[1] * 60 + g[2]) * 1000 + g[3]; b = (g[4] * 3600 + g[5] * 60 + g[6]) * 1000 + g[7]
         text = " ".join(l for l in lines[(2 if "-->" in lines[1] else 1):]).strip()
         if text:
-            segs.append(dict(start=a, end=b, text=text))
+            segs.append(dict(start=a, end=b, text=collapse_repeats(text)))
     # drop whisper hallucinations on silence: stock phrases, long segments with ≤3 words, and any line the model
     # repeats >10× in one file (e.g. 291× "اشتركوا في القناة"); then collapse consecutive repeats
     from collections import Counter as _C
@@ -354,7 +371,7 @@ def per_second(rows, mouse, clicks, rage, thrash, pages, transcript, vp, dur_s, 
     speech = defaultdict(list)
     for s in (transcript or []):
         for sec in range(int(s["start"] // 1000), int(s["end"] // 1000) + 1):
-            speech[sec].append(s["text"])
+            speech[sec].append(collapse_repeats(s["text"]))
     silence_run = 0; out = []; prev_cell = None; page_i = 0
     blink_times = [r["t_ms"] for r in rows if r.get("blink")]
     for sec in range(int(dur_s) + 1):
@@ -421,7 +438,7 @@ def per_second(rows, mouse, clicks, rage, thrash, pages, transcript, vp, dur_s, 
         rec["page_changed"] = int(any(sec * 1000 <= p["t_ms"] < sec * 1000 + 1000 for p in pages[1:]))
         # speech
         txt = " ".join(dict.fromkeys(speech.get(sec, [])))
-        rec["speech_text"] = txt; rec["speaking"] = int(bool(txt))
+        rec["speech_text"] = txt; rec["speaking"] = int(bool(txt)); rec["speech_segs"] = list(dict.fromkeys(speech.get(sec, [])))
         silence_run = 0 if txt else silence_run + 1
         rec["silence_run_s"] = silence_run
         cues = []
@@ -525,7 +542,7 @@ def detect_moments(secs, clicks, vp):
         tot = sum(dwell.values()) or 1
         M.append(dict(id=mid, type=kind, t_start_ms=a * 1000, t_end_ms=(b + 1) * 1000, score=round(min(score, 1), 2), evidence=ev,
                       gaze_dwell={k: round(v / tot, 2) for k, v in dwell.items()}, mouse_cells=sorted({s.get("mouse_cell") for s in w if s.get("mouse_cell")}),
-                      clicks=[c for s in w for c in s["clicks"]], transcript=" ".join(s["speech_text"] for s in w if s["speech_text"])[:300],
+                      clicks=[c for s in w for c in s["clicks"]], transcript=" ".join(dict.fromkeys(t for s in w for t in s.get("speech_segs", [])))[:300],
                       min_quality_grade=worst, **(extra or {})))
     n = len(secs)
     # SEARCHING: 3 s window ≥6 switches, ≥3 cells, mouse path ≥300, no click
@@ -548,7 +565,7 @@ def detect_moments(secs, clicks, vp):
     for k, c in enumerate(clicks):
         cs = int(c["t_ms"] // 1000); ccell = vp.cell(c["x"], c["y"])[2]
         pre = [s for s in secs if cs - 2 <= s["t_s"] <= cs and s.get("gaze_cell") == ccell and s["region_switches"] <= 1]
-        if pre and ccell:
+        if pre and ccell and not c.get("dead"):          # a dead click is not "acted" — it feeds MISS/FRUSTRATION instead
             lat = c["t_ms"] / 1000 - pre[0]["t_s"]
             conf = np.mean([s["gaze_conf"] for s in pre])
             add("FOUND_THEN_ACTED", pre[0]["t_s"], cs, 1 - 0.5 * min(lat / 2, 1) - (0.3 if conf < 0.5 else 0),
@@ -610,7 +627,25 @@ def detect_moments(secs, clicks, vp):
         if ch >= 2 and not any(m["type"] == "FRUSTRATION" and abs(m["t_start_ms"] - i * 1000) < 5000 for m in M):
             add("FRUSTRATION", max(0, i - 2), min(n - 1, i + 2), 0.5 + 0.25 * (ch - 2), [dict(signal="channels", value=dict(behavioural=beh, facial=fac, verbal=verb))])
     M.sort(key=lambda m: m["t_start_ms"])
-    return M
+    # merge same-type moments whose windows overlap or touch (rage clicks otherwise emit one moment per click)
+    M.sort(key=lambda m: (m["t_start_ms"], m["type"]))
+    merged = []; last_of = {}
+    for m in M:
+        last = last_of.get(m["type"])                      # merge against the previous moment of the SAME type
+        if last and m["t_start_ms"] <= last["t_end_ms"] + 1000:
+            last["t_end_ms"] = max(last["t_end_ms"], m["t_end_ms"]); last["score"] = max(last["score"], m["score"])
+            seen_t = {c.get("t_ms") for c in last["clicks"]}
+            last["clicks"] += [c for c in m["clicks"] if c.get("t_ms") not in seen_t]
+            last["min_quality_grade"] = max(last["min_quality_grade"], m["min_quality_grade"], key="ABCF".index)
+            w = [x for x in secs if last["t_start_ms"] // 1000 <= x["t_s"] <= (last["t_end_ms"] - 1) // 1000]
+            last["transcript"] = " ".join(dict.fromkeys(t for x in w for t in x.get("speech_segs", [])))[:300]
+            dwell = Counter(x["gaze_cell"] for x in w if x.get("gaze_cell") and x["gaze_cell"] != "uncertain"); tot = sum(dwell.values()) or 1
+            last["gaze_dwell"] = {k: round(v / tot, 2) for k, v in dwell.items()}
+            continue
+        merged.append(m); last_of[m["type"]] = m
+    for k, m in enumerate(merged, 1):
+        m["id"] = k
+    return merged
 
 
 # ---------------- sign self-test (§7.1) ----------------

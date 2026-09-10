@@ -74,6 +74,26 @@ def f(v, d=0.0):
         return d
 
 
+def collapse_repeats(text):
+    """Keep one copy of consecutive duplicate clauses inside one whisper segment (stutter repeats)."""
+    parts = re.split(r"(?<=[،,؟?.!])\s*", text or ""); out, prev = [], None
+    for q in parts:
+        n = re.sub(r"[\s\W]+", "", q).lower()
+        if not n:
+            continue
+        if n != prev:
+            out.append(q.strip())
+        prev = n
+    return " ".join(out) if out else (text or "").strip()
+
+
+def click_summary(cl, sep="; "):
+    """'What you get (dead) ×4' instead of four repeats."""
+    from collections import Counter as _C
+    labels = _C((c.get("target_text") or "click") + (" (dead)" if c.get("is_dead") else "") for c in (cl or []))
+    return sep.join(f"{k} ×{v}" if v > 1 else k for k, v in labels.items())
+
+
 def parse_srt(p):
     if not os.path.exists(p):
         return []
@@ -219,7 +239,7 @@ def build(session, product):
         prev_end = 0.0
         for i, s in enumerate(segs, 1):
             w = [r for r in rows if s["start"] <= f(r["t_s"]) <= max(s["end"], s["start"] + 1)]
-            appendix.append(dict(n=i, time=mmss(s["start"]), gap=f"{s['start']-prev_end:.1f}" if s["start"] - prev_end >= 1 else "", speech=s["text"], ar=is_arabic(s["text"]),
+            appendix.append(dict(n=i, time=mmss(s["start"]), gap=f"{s['start']-prev_end:.1f}" if s["start"] - prev_end >= 1 else "", speech=collapse_repeats(s["text"]), ar=is_arabic(s["text"]),
                                  eyes=eyes_summary(w), on=on_pct(w), mouse=Counter(r.get("mouse_cell") for r in w if r.get("mouse_cell")).most_common(1)))
             prev_end = s["end"]
     else:
@@ -229,7 +249,7 @@ def build(session, product):
                 continue
             cl = [c for r in w for c in json.loads(r.get("clicks") or "[]")]
             appendix.append(dict(n=t0 // 5 + 1, time=mmss(t0), gap="", speech="(no transcript)", ar=False, eyes=eyes_summary(w), on=on_pct(w),
-                                 mouse=Counter(r.get("mouse_cell") for r in w if r.get("mouse_cell")).most_common(1), clicks=", ".join(c.get("target_text") or "click" for c in cl)))
+                                 mouse=Counter(r.get("mouse_cell") for r in w if r.get("mouse_cell")).most_common(1), clicks=click_summary(cl, ", ")))
 
     data = dict(session=name, site=site, duration_s=dur, tier=tier, click_consistency=cc, signs=Q.get("signs"), flags=Q.get("flags"), grade_histogram=Q.get("grade_histogram"),
                 gaze_usable_frac=Q.get("gaze_usable_frac"), footer=Q.get("footer"), stats=dict(eyes_away_frac=away, scan_rate_per_min=scan_rate, gaze_cols=dict(cols), gaze_cells=dict(cells),
@@ -301,7 +321,7 @@ def render(D, rows, M, Q, product, appendix, segs):
     o.append("<h2>Detected moments (from the fused signal)</h2><table><tr><th>Time</th><th>Moment</th><th>Score</th><th>Quality</th><th>Eyes (dwell)</th><th>Mouse</th><th>Clicks</th><th>Said</th></tr>")
     for m in M:
         dw = ", ".join(f"{k} {v:.0%}" for k, v in sorted(m.get("gaze_dwell", {}).items(), key=lambda kv: -kv[1])[:3])
-        cl = "; ".join((c.get("target_text") or "click") + (" (dead)" if c.get("is_dead") else "") for c in m.get("clicks", []))[:80]
+        cl = click_summary(m.get("clicks", []))[:80]
         o.append(f"<tr><td>{mmss(m['t_start_ms']/1000)}–{mmss(m['t_end_ms']/1000)}</td><td><b>{esc(m['type'].replace('_',' '))}</b>{(' · '+esc(m['subtype'])) if m.get('subtype') else ''}</td><td>{m['score']:.2f}</td><td>{esc(m['min_quality_grade'])}</td><td>{esc(dw) or '—'}</td><td>{esc(', '.join(m.get('mouse_cells') or []))}</td><td>{esc(cl)}</td><td>{esc(m.get('transcript') or '')}</td></tr>")
     o.append("</table>")
     o.append("<h2>🟠 High-priority issues (P1)</h2>{{FINDINGS_P1}}<h2>🟢 What's working — keep &amp; promote (delighters)</h2>{{DELIGHTERS}}<h2>🔵 Nice-to-have (P2)</h2>{{FINDINGS_P2}}")

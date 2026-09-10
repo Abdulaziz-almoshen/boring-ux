@@ -193,7 +193,8 @@ def gaze_conf(r, img_w):
     if not r.get("face") or "h_raw" not in r:
         return 0.0
     head_pen = float(np.clip(1 - (abs(math.degrees(r["head_yaw"])) - 25) / 25, 0, 1))
-    size_ok = 1.0 if r["bbox_w"] / img_w >= 0.15 else 0.5
+    ratio = r["bbox_w"] / img_w
+    size_ok = 1.0 if ratio >= 0.15 else 0.75 if ratio >= 0.10 else 0.5   # small face degrades, doesn't disqualify
     return float((0 if r.get("blink_mask") else 1) * np.mean([r["sharp_h"], r["sharp_v"]]) * head_pen * size_ok)
 
 
@@ -454,10 +455,13 @@ def quality(rs, valid, rec, ctx):
     else:
         pose = 0
     blink = 1 if np.mean([r.get("blink_mask", 0) for r in rs]) <= 0.3 else 0.5
-    samples = 1 if len(valid) >= 6 else 0.5 if len(valid) >= 3 else 0
+    # "samples" = confident gaze estimates this second, on-screen OR off-screen (looking away is a valid observation,
+    # not a quality failure); `valid` (on-screen cells) is what region votes use.
+    samp = [r for r in rs if r.get("h") is not None and r.get("conf", 0) >= 0.3]
+    samples = 1 if len(samp) >= 6 else 0.5 if len(samp) >= 3 else 0
     stab = 1
-    if valid:
-        sd = math.degrees(np.std([r["h"] for r in valid])); stab = 1 if sd <= 6 else 0.5 if sd <= 10 else 0
+    if samp:
+        sd = math.degrees(np.std([r["h"] for r in samp])); stab = 1 if sd <= 6 else 0.5 if sd <= 10 else 0
     light = 0.5 if ("glare" in flags or "too_dark" in flags) else 1
     score = detect * size * pose * blink * samples * stab * light
     grade = "A" if score >= 0.8 else "B" if score >= 0.5 else "C" if score >= 0.2 else "F"

@@ -144,12 +144,18 @@ def stage_analyze(job):
     def on_line(line):
         m = re.search(r"… (\d+)s decoded", line)
         g = re.search(r"… gaze (\d+)/(\d+)", line)
+        def eta(frac, elapsed):
+            # prior from the measured rate, replaced by extrapolation of the observed pace once we have some progress;
+            # never negative even when a heavy file runs slower than the prior
+            prior = vs * RATE - elapsed
+            observed = (elapsed / frac) * (1 - frac) if frac > 0.05 else prior
+            return max(10, observed if elapsed > vs * RATE * 0.5 else max(prior, observed * 0.5)) + FILL_EST_S + 20
         if m:                                              # decode + face pass = first 80 % of the stage
             frac = 0.8 * min(1.0, int(m.group(1)) / vs); elapsed = now() - t0
-            set_progress(job, 0, frac, eta_s=(vs * RATE - elapsed) + FILL_EST_S + 20)
+            set_progress(job, 0, frac, eta_s=eta(frac, elapsed))
         elif g:                                            # gaze pass = last 20 %
             frac = 0.8 + 0.2 * int(g.group(1)) / max(int(g.group(2)), 1); elapsed = now() - t0
-            set_progress(job, 0, frac, eta_s=max(10, vs * RATE - elapsed) + FILL_EST_S + 20)
+            set_progress(job, 0, frac, eta_s=eta(frac, elapsed))
         elif "[bux]" in line:
             logj(job, line.replace("[bux] ", ""))
     rc, tail = run_proc(job, cmd, on_line)
@@ -208,8 +214,10 @@ def stage_fill(job):
     job["fill_est_s"] = int(est); save(job)
     t0 = now()
     env = dict(os.environ, PATH="/opt/homebrew/bin:/usr/local/bin:" + os.environ.get("PATH", ""))
+    model = os.environ.get("BUX_CLAUDE_MODEL", "claude-opus-5")   # judgment-heavy long-form writing → most capable model by default
+    job["model"] = model; save(job)
     with open(pf, encoding="utf-8") as fin:
-        p = subprocess.Popen([claude, "-p", "--output-format", "json"], stdin=fin, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env, cwd=REPO)
+        p = subprocess.Popen([claude, "-p", "--model", model, "--output-format", "json"], stdin=fin, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env, cwd=REPO)
     CTRL[job["id"]]["proc"] = p
     import math as _m
     while p.poll() is None:

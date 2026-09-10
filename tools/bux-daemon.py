@@ -284,12 +284,12 @@ def llm_status(start=False):
     return dict(backend="none", model=None, available=True, note="no local model — " + why)
 
 
-def write_with_ollama(job, prompt, est, t0, out_dir=None, tag="", pbase=0.0, pspan=1.0, num_ctx=16384):
+def write_with_ollama(job, prompt, est, t0, out_dir=None, tag="", pbase=0.0, pspan=1.0, num_ctx=16384, num_predict=4096):
     """One chat call to the local model. Saves the raw response (+ token counts) to analysis/fill-response-<tag>.json.
     Progress is reported inside [pbase, pbase+pspan] of the fill stage. Returns (text, err)."""
     import urllib.request, math as _m
     body = json.dumps(dict(model=OLLAMA_MODEL, stream=False, format="json", keep_alive="3m", think=False,   # think=False: Qwen3 must not emit <think> preambles
-                           options=dict(num_ctx=num_ctx, temperature=0.2, num_predict=8192),
+                           options=dict(num_ctx=num_ctx, temperature=0.2, num_predict=num_predict),
                            messages=[dict(role="user", content=prompt)])).encode()
     req = urllib.request.Request(OLLAMA + "/api/chat", data=body, headers={"Content-Type": "application/json"}, method="POST")
     result = {}
@@ -333,7 +333,7 @@ def _parse_mapping(text):
         return {}
 
 
-def evidence_pack(A, max_transcript=24000):
+def evidence_pack(A, max_transcript=14000, timeline_s=None):
     """Compact evidence for local models: computed stats, moments, transcript, and a 10-second timeline (not 1 Hz rows)."""
     import csv as _csv
     from collections import Counter as _C
@@ -358,8 +358,9 @@ def evidence_pack(A, max_transcript=24000):
     except Exception:  # noqa: BLE001
         pass
     lines = []
-    for b in range(0, len(rows), 10):
-        w = rows[b:b + 10]
+    step = timeline_s or (10 if len(rows) <= 300 else 20 if len(rows) <= 900 else 30)      # keep long sessions inside the local context window
+    for b in range(0, len(rows), step):
+        w = rows[b:b + step]
         cells = _C(r["gaze_cell"] for r in w if r.get("gaze_cell") and r["gaze_cell"] not in ("", "uncertain"))
         states = _C(r["gaze_state"] for r in w if r.get("gaze_state"))
         on = sum(1 for r in w if r.get("gaze_state") == "on_screen")
@@ -374,6 +375,11 @@ def evidence_pack(A, max_transcript=24000):
                      f" mouse={mouse.most_common(1)[0][0] if mouse else '-'}{' clicks='+'|'.join(clicks[:3]) if clicks else ''}{' expr='+expr.most_common(1)[0][0] if expr else ''} q={q.most_common(1)[0][0] if q else '-'}{' said: '+said if said else ''}")
     timeline = "\n".join(lines)
     return f"=== computed data (JSON) ===\n{json.dumps(data, ensure_ascii=False)}\n\n=== transcript (verbatim, [m:ss] text) ===\n{tr}\n\n=== timeline, one line per 10 s (eyes=dominant 3x3 cell or state; on=seconds on-screen; sw=region switches; q=quality grade) ===\n{timeline}\n"
+
+
+TRANSLATE_RULES = """Translate each numbered transcript line into natural English. Return ONE JSON object whose keys are EXACTLY the placeholder
+names listed below (APPENDIX_ENGLISH_<n> for line n) and whose values are the plain-text English translation of that line (no HTML, no notes).
+Keep it literal; keep UI words (button names, field labels) as said. Output JSON only."""
 
 
 FILL_RULES_LOCAL = """You are a senior UX researcher writing part of a usability report from a moderated think-aloud session with webcam eye tracking.
@@ -535,12 +541,17 @@ def stage_fill(job):
             logj(job, "timing: no clicks in this session — filled deterministically, model pass skipped")
         per = min(900, 120 + len(pack.encode("utf-8")) / 110)          # measured: a 22 KB chunk takes about 5 min on qwen3:14b (M-series GPU)
         job["fill_est_s"] = int(per * len(groups)); save(job)
+        CAPS = dict(overview=3500, findings=3000, timing=2000)
         for k, (gname, gnames, extra) in enumerate(groups):
-            prompt = (FILL_RULES_LOCAL + f"\n\nWORDING TIER: {tier}\nPLACEHOLDERS (return all {len(gnames)} keys): {json.dumps(gnames)}\n{extra}\n\n" + pack)
+            if gname.startswith("appendix"):      # translation only: no evidence pack needed (was 15k prompt tokens per pass)
+                prompt = (TRANSLATE_RULES + f"\nPLACEHOLDERS (return all {len(gnames)} keys): {json.dumps(gnames)}\n{extra}\n")
+            else:
+                prompt = (FILL_RULES_LOCAL + f"\n\nWORDING TIER: {tier}\nPLACEHOLDERS (return all {len(gnames)} keys): {json.dumps(gnames)}\n{extra}\n\n" + pack)
+            cap = CAPS.get(gname, 1500)
             open(os.path.join(A, f"fill-prompt-{gname}.txt"), "w", encoding="utf-8").write(prompt)
             got = {}
             for attempt in (1, 2):
-                res, err = write_with_ollama(job, prompt, per, now(), A, f"{gname}-{attempt}", pbase=k / len(groups), pspan=1 / len(groups))
+                res, err = write_with_ollama(job, prompt, per, now(), A, f"{gname}-{attempt}", pbase=k / len(groups), pspan=1 / len(groups), num_predict=cap)
                 if err == "interrupted":
                     return "interrupted"
                 if err:

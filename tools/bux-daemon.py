@@ -348,7 +348,12 @@ FINDINGS_P0/FINDINGS_P1/FINDINGS_P2/DELIGHTERS = one or more blocks EXACTLY like
 (use class p1/p2/keep and labels P1/P2/KEEP accordingly; DELIGHTERS use keep). SIGNAL_i ∈ Delight/Friction/Confusion/Request; FRICTION_i = 0-100;
 RECOMMENDATION_i, LATENCY_MEANING_i, INTENT_READS_AS_i, JOURNEY_SUMMARY = one or two sentences. APPENDIX_ENGLISH_i = English translation of the
 given line i (plain text). GRADE_TABLE rows: AI & intelligence · Visual design · Data clarity · Delight · Task efficiency · Actionability · Discoverability
-(score /10 or 'no evidence', with the evidence). Output JSON only."""
+(score /10 or 'no evidence', with the evidence).
+HARD REQUIREMENTS (violations make the report unusable): (1) every GRADE_TABLE row's third cell contains either a verbatim quote with its [m:ss]
+or the exact words "no evidence"; a row with no evidence must score "no evidence", never a number. (2) In tier 'unvalidated', every sentence
+that mentions where the eyes were includes the words "estimated (unvalidated)". (3) No invented dates, sprints, or quarters in ROADMAP_ROWS —
+use Now / Next / Later. (4) SIGNAL 'Delight' cannot have FRICTION above 30; 'Confusion'/'Friction' cannot be below 40. (5) Do not repeat the same
+sentence across placeholders. (6) Prefer specific observed moments (timeline lines, moments list) over general UX advice. Output JSON only."""
 
 
 def plan_groups(names, appendix):
@@ -405,7 +410,7 @@ NOT_WRITTEN = ('<div class="caveat"><b>Findings not written.</b> No local langua
 def stage_fill(job):
     A = os.path.join(job["folder"], "analysis"); scaffold = os.path.join(A, "report-scaffold.html")
     html = open(scaffold, encoding="utf-8").read()
-    names = sorted(set(re.findall(r"\{\{([A-Z_]+(?:_\d+)?)\}\}", html)))
+    names = sorted(set(re.findall(r"\{\{([A-Z][A-Z0-9_]*)\}\}", html)))
     st = llm_status(start=True); job["llm"] = st; save(job)     # start Ollama if it isn't running
     if st["backend"] == "none" or not st["available"]:
         job.setdefault("warnings", []).append("findings not written: " + (st.get("note") or "no report-writing model available"))
@@ -440,6 +445,14 @@ def stage_fill(job):
                 if err:
                     raise RuntimeError(f"ollama failed: {err[-300:]}")
                 got = {kk: vv for kk, vv in _parse_mapping(res).items() if kk in gnames and vv}
+                if got and gname == "overview" and attempt == 1:
+                    rows = re.findall(r"<tr>(.*?)</tr>", got.get("GRADE_TABLE", ""), re.S)
+                    bad = [r for r in rows if not re.search(r"\[\d+:\d\d\]", r) and "no evidence" not in r.lower()]
+                    if rows and bad:
+                        logj(job, f"overview: {len(bad)}/{len(rows)} grade rows lack evidence — asking the model to correct")
+                        prompt = prompt + ("\n\nCORRECTION: your previous GRADE_TABLE had rows without evidence. Rewrite ALL placeholders; every grade row "
+                                           "must cite a verbatim quote with [m:ss] or say 'no evidence' (and then the score must be 'no evidence').")
+                        continue
                 if got:
                     break
             mapping.update(got)

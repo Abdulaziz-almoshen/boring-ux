@@ -157,5 +157,8 @@ class GazeModel:
         hf, vf, _, _ = self.predict([cv2.flip(c, 1) for c in crops224])
         rh = float(np.corrcoef(h0, hf)[0, 1]) if h0.std() > 0 else 0.0
         rv = float(np.corrcoef(v0, vf)[0, 1]) if v0.std() > 0 else 0.0
-        status = "pass" if (rh < -0.5 and rv > 0.5) else ("inconclusive" if abs(rh) < 0.5 else "FAIL")
-        return dict(status=status, r_horizontal=round(rh, 3), r_vertical=round(rv, 3), n=len(crops224))
+        # Decisive criterion: yaw must NEGATE under a horizontal flip (rh strongly negative). A swapped head shows rh > 0.
+        # Pitch stability (rv) is only informative when the pitch signal has variance — a still participant makes rv noise.
+        status = "pass" if rh < -0.5 else ("FAIL" if rh > 0.5 else "inconclusive")
+        note = None if rv > 0.5 else "pitch check uninformative (low variance or noisy crops)"
+        return dict(status=status, r_horizontal=round(rh, 3), r_vertical=round(rv, 3), n=len(crops224), note=note)

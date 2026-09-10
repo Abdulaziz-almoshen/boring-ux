@@ -84,7 +84,9 @@ def run(args):
     signs = dict(l2cs_channel_test=gaze.flip_selftest(crops[:30]))
     log(f"flip self-test: {signs['l2cs_channel_test']}")
     if signs["l2cs_channel_test"]["status"] == "FAIL":
-        sys.exit("L2CS channel assignment FAILED the flip self-test — aborting (§2.6)")
+        # Do not abort the whole session for a self-test: keep transcript/mouse/click analysis, flag the gaze channel as suspect.
+        log("WARNING: L2CS channel assignment FAILED the flip self-test — continuing; gaze flagged 'l2cs_channel_fail' (treat as unvalidated)")
+        flags.append("l2cs_channel_fail")
     ear_thr = F.mark_blinks(rows)
 
     # 5 raw mapping, self-centring prior

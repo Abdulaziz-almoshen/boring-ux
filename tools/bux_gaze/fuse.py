@@ -442,7 +442,8 @@ def quality(rs, valid, rec, ctx):
     size = 1
     if faces:
         ratio = np.median([r["bbox_w"] / r["img_w"] for r in faces])
-        size = 1 if ratio >= 0.25 else 0.5 if ratio >= 0.15 else 0
+        # ≥25 % of frame width = full; 10–25 % = half credit (accuracy degrades, signal is still real); <10 % = unusable
+        size = 1 if ratio >= 0.25 else 0.5 if ratio >= 0.10 else 0
         if size < 1: flags.append("face_small")
         yaw = abs(np.median([math.degrees(r["head_yaw"]) for r in faces])); pit = abs(np.median([math.degrees(r["head_pitch"]) for r in faces]) - ctx["pitch_med"])
         pose = 1 if (yaw <= 20 and pit <= 20) else 0.5 if (yaw <= 30 and pit <= 25) else 0

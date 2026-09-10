@@ -23,9 +23,14 @@ def log(msg):
 
 
 def transcribe(session, out_dir, model_path, lang):
-    srt = os.path.join(out_dir, "transcript.srt")
-    if os.path.exists(srt):
-        return srt, []
+    srt = os.path.join(out_dir, "transcript.srt"); meta_p = os.path.join(out_dir, "transcript.meta.json")
+    want = dict(model=os.path.basename(model_path or ""), vad=os.path.exists(os.path.join(os.path.dirname(model_path or ""), "ggml-silero-v5.1.2.bin")), beam=5, v=2)
+    try:
+        have = json.load(open(meta_p))
+    except Exception:  # noqa: BLE001
+        have = None
+    if os.path.exists(srt) and have == want:
+        return srt, []          # same whisper settings → reuse; otherwise re-transcribe (an old file may predate the VAD fix)
     audio = os.path.join(session, "audio.webm")
     if not os.path.exists(audio):
         return None, ["transcript_missing"]
@@ -53,6 +58,8 @@ def transcribe(session, out_dir, model_path, lang):
         flags.append(f"speech_lang={m.group(1)}:{float(m.group(2)):.2f}")
     if r.returncode != 0:
         flags.append("whisper_failed")
+    elif os.path.exists(srt):
+        json.dump(want, open(meta_p, "w"))
     return (srt if os.path.exists(srt) else None), (flags if os.path.exists(srt) else flags + ["transcript_missing"])
 
 

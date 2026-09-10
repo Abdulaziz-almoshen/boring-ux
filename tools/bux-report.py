@@ -304,7 +304,7 @@ def render(D, rows, M, Q, product, appendix, segs):
              f"<tr><td>{esc(D['session'])}</td><td>{mmss(D['duration_s'])}</td><td>{{{{JOURNEY_SUMMARY}}}}</td><td>{100*st['eyes_away_frac']:.0f}%</td><td>{st['scan_rate_per_min']:.0f} switches/min</td><td>{st['clicks']} ({st['dead_clicks']} · {st['rage_clicks']})</td></tr></table>")
     # Part B
     o.append("<h2>Part B · Attention analytics — the session, graphed</h2><h3>Session · gaze column, engagement, searching, moments</h3>" + attention_svg(rows, M, D["duration_s"]))
-    o.append("<p class='sub'>Ribbon = gaze column per second (orange L, blue C, green R, grey away/unknown). Blue line = on-screen engagement. Orange line = searching intensity. Bottom bar = detected moments (orange searching, red confusion, dark-red frustration, green found→acted, grey look-away).</p>")
+    o.append("<p class='sub'>Ribbon = gaze column per second (orange L, blue C, green R, grey away/unknown). Blue line = on-screen engagement. Orange line = searching intensity. Bottom bar = detected moments (" + ", ".join(f"{k.replace('_', ' ').lower()} <span style=\"color:{c}\">■</span>" for k, c in MOMENT_COLOR.items()) + ").</p>")
     # Part C scorecard
     o.append("<h2>Part C · Feature-by-feature scorecard</h2><table><tr><th>Feature / phase</th><th>Time</th><th>Gaze L/C/R</th><th>On-screen</th><th>Search/min</th><th>Clicks</th><th>Signal</th><th>Friction</th><th>Recommendation</th></tr>")
     for i, p in enumerate(D["phases"], 1):

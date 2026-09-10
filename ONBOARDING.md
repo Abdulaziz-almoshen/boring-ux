@@ -16,10 +16,11 @@ Set up Boring UX (open-source webcam eye-tracking usability testing) on this Mac
    background services from those folders), downloads the gaze/face models and the speech model (~1.7 GB total), and
    installs the local processing service so it starts at login. Confirm the smoke test passes and that
    http://127.0.0.1:7331/health returns ok.
-4. The report findings are written by a LOCAL open-source model via Ollama (Gemma 3 12B, or Qwen3 14B / Qwen 2.5 if one
-   is already installed), never by a cloud model. setup-analysis.sh --all installs Ollama and pulls a model only if none is
-   present (~8 GB). Confirm http://127.0.0.1:7331/health shows "llm": {"backend": "ollama", "available": true}.
-   Do not configure Claude or any API key for report writing.
+4. The report findings are written by LOCAL open-source models via Ollama, never by a cloud model: a text model writes the
+   findings (Gemma 3 12B, or Qwen3 14B / Qwen 2.5 if one is already installed) and a vision model reads the screen recording
+   (Qwen3-VL 8B, ~6 GB) so the report can name the button someone clicked instead of a screen region.
+   setup-analysis.sh --all installs Ollama and pulls each only if none is present. Confirm http://127.0.0.1:7331/health shows
+   "llm": {"backend": "ollama", "available": true}. Do not configure Claude or any API key for report writing.
 5. Then guide me, step by step, through the two things you cannot click for me:
    a) Load the extension: open chrome://extensions, turn on Developer mode, click "Load unpacked", choose
       ~/Desktop/boring-ux/extension, then pin "Boring UX" in the toolbar.

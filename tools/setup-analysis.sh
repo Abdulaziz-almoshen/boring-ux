@@ -9,6 +9,7 @@ DIR="${BUX_AI_DIR:-$HOME/.boring-ux}"
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WITH_WHISPER=0; WITH_DAEMON=0; WITH_LLM=0
 LLM_MODEL="${BUX_LLM_MODEL:-gemma3:12b}"          # local report writer (≈8 GB); never a cloud model
+VLM_MODEL="${BUX_VLM_MODEL:-qwen3-vl:8b-instruct}" # local screen reader (≈6 GB): names what the participant clicked
 for a in "$@"; do case "$a" in --with-whisper) WITH_WHISPER=1;; --with-daemon) WITH_DAEMON=1;; --with-llm) WITH_LLM=1;; --all) WITH_WHISPER=1; WITH_DAEMON=1; WITH_LLM=1;; esac; done
 mkdir -p "$DIR/models"; cd "$DIR"
 echo "▶ Boring UX analysis env → $DIR"
@@ -60,6 +61,12 @@ if [ "$WITH_LLM" = 1 ]; then
     echo "  a suitable local model is already installed — skipping the download"
   else
     ollama pull "$LLM_MODEL"                                                              # ≈8 GB, one time
+  fi
+  # The screen recording is read by a vision model, so findings can name the real button instead of a grid cell.
+  if ollama list 2>/dev/null | grep -qE "^(qwen3-vl|qwen2\.5vl|minicpm-v|granite3\.2-vision)[:[:space:]]"; then
+    echo "  a local vision model is already installed — skipping the download"
+  else
+    ollama pull "$VLM_MODEL"                                                              # ≈6 GB, one time
   fi
 fi
 if [ "$WITH_DAEMON" = 1 ]; then

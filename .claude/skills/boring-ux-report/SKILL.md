@@ -65,3 +65,6 @@ Use the SEARCHING/FOUND-THEN-ACTED moments' `gaze_dwell` for the window before t
 session baseline dwell for that cell/column (report-data `stats.gaze_cells`), and report per the design's template
 (likelihood ratio + column/cell + confidence), e.g. "During the 7 s before clicking *Submit*, 61 % of confident gaze was in
 the right column (session baseline 38 %) — likely searching on the right; top-right unconfirmed." See the gaze-from-video design (git history: docs/GAZE-FROM-VIDEO-DESIGN.md @ 3d2a791) §6.
+
+## Screen reading (optional, automatic)
+If the session has `screen.webm` and a local vision model is installed, `tools/bux-screen-read.py <session>` writes `analysis/screens.json`: for every click it records the element under the cursor and whether it looks clickable, and for every moment what was inside the 3×3 cell the participant was reading. The writer receives this, so findings name real interface elements. It is skipped silently when either the recording or the model is missing.

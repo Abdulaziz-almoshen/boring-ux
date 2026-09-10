@@ -203,7 +203,7 @@ window.addEventListener("scroll",()=>{ if(!S.recording)return; const y=scrollY||
 function announce(){ if(!S.recording)return; const p={type:"page",url:location.href,title:document.title}; ev(p); S.pages.push({url:location.href,title:document.title,startT:Math.round(nowRel()),endT:null}); }
 ["pushState","replaceState"].forEach(m=>{ const o=history[m]; history[m]=function(){ const r=o.apply(this,arguments); setTimeout(announce,0); return r; }; });
 addEventListener("popstate",announce);
-document.addEventListener("visibilitychange",()=>{ if(!S.recording)return; if(document.hidden){ ev({type:"tracking_paused"}); } else { ev({type:"tracking_resumed"}); setHint("⚠ The tab was hidden — the camera freezes while this tab is not in front. Stay on this tab while recording."); alert("Boring UX: eye tracking paused while the tab was hidden — gaze has a gap."); }});
+document.addEventListener("visibilitychange",()=>{ if(!S.recording)return; if(document.hidden){ ev({type:"tracking_paused"}); } else { ev({type:"tracking_resumed"}); setHint("⚠ The tab was hidden — the camera freezes while this tab is not in front. Stay on this tab while recording."); }});
 
 /* ---------- record ---------- */
 function mime(){ return ["video/webm;codecs=vp9,opus","video/webm;codecs=vp8,opus","video/webm"].find(m=>MediaRecorder.isTypeSupported(m))||""; }

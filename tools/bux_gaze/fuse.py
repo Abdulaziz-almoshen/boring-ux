@@ -380,8 +380,8 @@ def per_second(rows, mouse, clicks, rage, thrash, pages, transcript, vp, dur_s, 
         rec["gaze_state"] = states.most_common(1)[0][0] if states else ("no_face" if face_present < 0.5 else "on_screen")
         if face_present < 0.5:
             rec["gaze_state"] = "no_face"
-        if any(a <= sec * 1000 < b for a, b in quality_ctx.get("hidden", [])):
-            rec["gaze_state"] = "tab_hidden"; rec["tab_hidden"] = 1        # camera frozen while the tab was hidden — not a look-away
+        if any(a <= sec * 1000 < b for a, b in quality_ctx.get("frozen", [])):
+            rec["gaze_state"] = "camera_frozen"; rec["tab_hidden"] = 1     # no video frames (tab hidden / app switch) — not a look-away
         # switches within the second (10 Hz majority)
         seq = []
         for k in range(sec * 10, sec * 10 + 10):
@@ -519,7 +519,7 @@ def detect_moments(secs, clicks, vp):
         nonlocal mid; mid += 1
         w = [s for s in secs if a <= s["t_s"] <= b]
         grades = [s["quality_grade"] for s in w]; worst = "F" if "F" in grades else "C" if "C" in grades else "B" if "B" in grades else "A"
-        if worst == "F" and kind not in ("LOOK_AWAY", "TAB_SWITCH"):
+        if worst == "F" and kind not in ("LOOK_AWAY", "CAMERA_FROZEN"):
             return
         dwell = Counter(s["gaze_cell"] for s in w if s.get("gaze_cell") and s["gaze_cell"] != "uncertain")
         tot = sum(dwell.values()) or 1
@@ -573,14 +573,14 @@ def detect_moments(secs, clicks, vp):
             i = j + 1
         else:
             i += 1
-    # TAB-SWITCH: the participant left the test tab (camera frozen) — reported as its own moment, never as attention
+    # CAMERA-FROZEN: no video frames for ≥1 s (Chrome stopped delivering camera frames: tab hidden / app switch) — its own moment, never attention
     i = 0
     while i < n:
         if secs[i].get("tab_hidden"):
             j = i
             while j + 1 < n and secs[j + 1].get("tab_hidden"):
                 j += 1
-            add("TAB_SWITCH", i, j, 0.8, [dict(signal="visibilitychange", duration_s=j - i + 1)], dict(subtype="left the test tab"))
+            add("CAMERA_FROZEN", i, j, 0.8, [dict(signal="no_video_frames", duration_s=j - i + 1)], dict(subtype="camera frozen: tab hidden or app switch"))
             i = j + 1
         else:
             i += 1

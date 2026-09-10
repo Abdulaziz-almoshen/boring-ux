@@ -167,11 +167,11 @@ def run(args):
     # 8 fuse
     dur_s = rows[-1]["t_ms"] / 1000
     pitch_med = float(np.median([math.degrees(r["head_pitch"]) for r in rows if r.get("face")])) if any(r.get("face") for r in rows) else 0
-    hidden = F.hidden_intervals(events)
-    secs = F.per_second(rows, mouse, clicks, rage, thrash, pages, transcript, vp, dur_s, dict(pitch_med=pitch_med, hidden=hidden))
+    frozen = [(a, b) for a, b in gaps if b - a >= 1000]                      # ≥1 s without decoded frames = camera frozen (tab hidden / app switch)
+    secs = F.per_second(rows, mouse, clicks, rage, thrash, pages, transcript, vp, dur_s, dict(pitch_med=pitch_med, frozen=frozen))
     hidden_s = sum(1 for s_ in secs if s_.get("tab_hidden"))
     if hidden_s:
-        flags.append(f"tab_hidden_s={hidden_s}"); log(f"tab hidden (camera frozen) for {hidden_s}s — excluded from attention/quality figures")
+        flags.append(f"camera_frozen_s={hidden_s}"); log(f"camera frozen (no video frames) for {hidden_s}s in {len(frozen)} gap(s) — excluded from attention/quality figures")
     expr = F.expressions(rows, secs)
     # 9 moments + click-consistency
     cc = F.click_consistency(rows, clicks, vp) if clicks else dict(n=0, tier="unvalidated", note="no clicks")
@@ -179,7 +179,7 @@ def run(args):
         cc["tier"] = "unvalidated"
     moments = F.detect_moments(secs, clicks, vp)
     shown = [s for s in secs if not s.get("tab_hidden")]                     # hidden-tab seconds are not attention data
-    grades = dict((g, sum(1 for s in shown if s["quality_grade"] == g)) for g in "ABCF"); grades["hidden"] = hidden_s
+    grades = dict((g, sum(1 for s in shown if s["quality_grade"] == g)) for g in "ABCF"); grades["frozen"] = hidden_s
     usable = sum(1 for s in shown if s["quality_grade"] in "ABC" and s.get("gaze_conf", 0) >= 0.3) / max(len(shown), 1)
 
     # write
@@ -198,7 +198,7 @@ def run(args):
     quality = dict(version=VERSION, session=os.path.basename(session), duration_s=round(dur_s, 1), display=disp, viewport=dict(w=vp.inner_w, h=vp.inner_h),
                    f_px=round(f_px, 1), ear_blink_threshold=round(ear_thr, 3), frames=dict(mediapipe=len(rows), l2cs=len(crops), face_present_frac=round(float(np.mean([r.get("face", 0) for r in rows])), 3), pts_gaps_over_200ms=len(gaps), timing=plan),
                    signs=signs, calibration=calib, click_consistency=cc, grade_histogram=grades, gaze_usable_frac=round(usable, 3),
-                   moments=dict((t, sum(1 for m in moments if m["type"] == t)) for t in ("SEARCHING", "FOUND_THEN_ACTED", "MISS_THEN_CORRECT", "LOOK_AWAY", "TAB_SWITCH", "CONFUSION", "FRUSTRATION")),
+                   moments=dict((t, sum(1 for m in moments if m["type"] == t)) for t in ("SEARCHING", "FOUND_THEN_ACTED", "MISS_THEN_CORRECT", "LOOK_AWAY", "CAMERA_FROZEN", "CONFUSION", "FRUSTRATION")),
                    flags=sorted(set(flags)), params=vars(args),
                    footer="Uncalibrated webcam gaze (L2CS-Net, Gaze360): typical error ≈10° ≈8 cm at 55 cm; a 3×3 cell is about one error radius. Column (L/C/R) statements are right roughly 7 in 10; specific cells about half the time; looking-away and keyboard glances are reliable.")
     json.dump(quality, open(os.path.join(out_dir, "quality.json"), "w"), ensure_ascii=False, indent=1)

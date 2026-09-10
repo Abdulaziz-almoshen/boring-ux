@@ -379,7 +379,7 @@ def evidence_pack(A, max_transcript=24000):
 FILL_RULES_LOCAL = """You are a senior UX researcher writing part of a usability report from a moderated think-aloud session with webcam eye tracking.
 Return ONE JSON object. Keys = EXACTLY the placeholder names listed below (all of them, none extra). Values = HTML strings (no markdown).
 Rules: cite evidence as said · eyes · time; quote the transcript verbatim (original language) with [m:ss]; eyes come from the timeline/moments
-(3x3 cells TL,TC,TR,ML,MC,MR,BL,BC,BR; states on_screen/off_left/off_right/down_keyboard/away/no_face/tab_hidden — tab_hidden = the participant switched away from the test tab (camera frozen): it is NOT attention data and never a 'look away'; TAB_SWITCH moments report it); NEVER invent quotes, clicks or events;
+(3x3 cells TL,TC,TR,ML,MC,MR,BL,BC,BR; states on_screen/off_left/off_right/down_keyboard/away/no_face/camera_frozen — camera_frozen = Chrome delivered no camera frames (the tab was hidden or the participant switched apps): it is NOT attention data and never a 'look away'; CAMERA_FROZEN moments report it); NEVER invent quotes, clicks or events;
 expression cues are cue-level, never emotions as facts. Wording tier: 'regions' = firm columns/halves; 'likely' = say 'likely'; 'unvalidated' =
 every gaze statement says 'estimated (unvalidated)' and findings lean on transcript/mouse/clicks/look-away. If evidence is thin, say so plainly.
 Formats: GRADE_TABLE/ROADMAP_ROWS/ACTION_LIST_ROWS/PLACEMENT_TABLE/PER_NEED_MAP = <tr><td>…</td>…</tr> rows only.

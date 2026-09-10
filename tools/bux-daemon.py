@@ -485,15 +485,30 @@ def verify_findings(mapping, speech_text, no_speech):
         blocks = re.findall(r'<div class="finding">.*?</div>\s*</div>', v, re.S)
         if not blocks:
             continue
-        keep = [b for b in blocks if all(quote_ok(q) for q in re.findall(r'<span class="ar">(.*?)</span>', b, re.S))]
+        keep, seen = [], set()
+        for b in blocks:
+            quotes = re.findall(r'<span class="ar">(.*?)</span>', b, re.S)
+            if not all(quote_ok(q) for q in quotes):
+                continue
+            sig = (_norm_txt(" ".join(quotes)), (re.search(r"\[\d+:\d\d\]", b) or [""])[0])
+            if sig in seen:                       # the model sometimes returns the same finding twice under two titles
+                continue
+            seen.add(sig); keep.append(b)
+        prefix = {"FINDINGS_P0": "C", "FINDINGS_P1": "H", "FINDINGS_P2": "N", "DELIGHTERS": "D"}[key]
+        keep = [re.sub(r"<h3>\s*(?:ID|[A-Z]\d*)?\s*·", f"<h3>{prefix}{i+1} ·", b, count=1) for i, b in enumerate(keep)]   # sequential IDs, no literal "ID"
         dropped += len(blocks) - len(keep)
         mapping[key] = "\n".join(keep) if keep else "<p>No evidence for this tier in this session.</p>"
-    rows = re.findall(r"<tr>.*?</tr>", mapping.get("GRADE_TABLE") or "", re.S); out = []
+    rows = re.findall(r"<tr>.*?</tr>", mapping.get("GRADE_TABLE") or "", re.S); out = []; cited = set()
     for r in rows:
         cells = re.findall(r"<td>(.*?)</td>", r, re.S)
         quotes = re.findall(r'[\"“](.{4,}?)[\"”]', re.sub(r"<[^>]+>", "", r))
-        if len(cells) >= 3 and quotes and not all(quote_ok(q) for q in quotes):
+        stamp = (re.search(r"\[\d+:\d\d\]", r) or [""])[0]
+        bad = len(cells) >= 3 and quotes and not all(quote_ok(q) for q in quotes)
+        lazy = len(cells) >= 3 and stamp and stamp in cited and (cells[1].strip().lower() == "no evidence")   # same moment pasted into every row
+        if bad or lazy:
             r = f"<tr><td>{cells[0]}</td><td>no evidence</td><td>no evidence</td></tr>"; blanked += 1
+        elif stamp:
+            cited.add(stamp)
         out.append(r)
     if rows:
         mapping["GRADE_TABLE"] = "\n".join(out)

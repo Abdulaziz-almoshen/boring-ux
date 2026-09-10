@@ -117,6 +117,22 @@ A few sites disable the camera for everything in their page via a `Permissions-P
 
 > **Recorded before Sept 9, 2026 and `face.webm`/`screen.webm` won't play?** A data-URL bug saved them as base64 text (audio was unaffected). Nothing is lost — run `python3 tools/recover-webm.py ~/Downloads/boring-ux` to decode them back to valid video.
 
+## Models & licenses (read this if you use Boring UX commercially)
+
+Everything runs locally and costs nothing to run. Licenses differ, though:
+
+| Component | License | Commercial use |
+|---|---|---|
+| MediaPipe FaceLandmarker (face, iris, blink, head pose, expression cues) | Apache-2.0 | ✅ |
+| whisper.cpp + Whisper `large-v3-turbo` (speech → transcript) | MIT (code and weights) | ✅ |
+| L2CS-Net code | MIT | ✅ |
+| **L2CS-Net weights** (`L2CSNet_gaze360.pkl`, trained on Gaze360) | Gaze360 **Research License — non-commercial** | ⚠️ research / internal evaluation only |
+| WebGazer.js (live gaze dot in the extension) | GPLv3 (LGPLv3 available to companies under $1M valuation) | ✅ copyleft — the extension bundle inherits it |
+| PyTorch, OpenCV, PyAV, ffmpeg (called as a binary) | BSD / Apache-2.0 / BSD / LGPL-GPL | ✅ |
+| Claude (writes the report findings) | your Claude Code plan / API usage | the only paid step |
+
+If the gaze-weights restriction matters to you, use a MediaPipe-only gaze signal (iris + eye-look blendshapes → left/center/right; Apache-2.0) — coarser than L2CS but fully commercial-clean. Sources: [Gaze360 license](https://github.com/erkil1452/gaze360/blob/master/LICENSE.md), [L2CS-Net](https://github.com/ahmednull/l2cs-net), [WebGazer license](https://github.com/brownhci/WebGazer/blob/master/LICENSE.md).
+
 ## Honest limitations
 
 - **Webcam gaze is region-accurate, not pixel-perfect.** The extension tracks gaze with **MediaPipe FaceLandmarker** (per-eye **iris landmarks + 3D head-pose**) mapped to the screen by a ridge regression — a big step up from classic 2D webcam trackers. It's still fought three more ways: a required **13-point calibration**, a **validation pass that measures your real accuracy in px** (saved into `session.json` as `gazeAccuracyPx`), and **continuous recalibration from every in-page click**. Still: great for regions and heatmaps, not for telling two adjacent buttons apart — hardware trackers exist for that.

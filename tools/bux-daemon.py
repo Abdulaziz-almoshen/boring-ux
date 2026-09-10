@@ -480,12 +480,13 @@ def verify_findings(mapping, speech_text, no_speech):
         if not n or n in ("nospeech", "notranscript", "noquote"):
             return True
         return (not no_speech) and len(n) >= 4 and n in corpus
-    for key in ("FINDINGS_P0", "FINDINGS_P1", "FINDINGS_P2", "DELIGHTERS"):
+    seen = set()                                                         # shared across tiers: the same moment must not appear as P1 and again as P2
+    for key in ("FINDINGS_P0", "FINDINGS_P1", "DELIGHTERS", "FINDINGS_P2"):
         v = mapping.get(key) or ""
         blocks = re.findall(r'<div class="finding">.*?</div>\s*</div>', v, re.S)
         if not blocks:
             continue
-        keep, seen = [], set()
+        keep = []
         for b in blocks:
             quotes = re.findall(r'<span class="ar">(.*?)</span>', b, re.S)
             if not all(quote_ok(q) for q in quotes):

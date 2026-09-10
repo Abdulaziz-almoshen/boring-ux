@@ -138,9 +138,13 @@ def stage_analyze(job):
     t0 = now()
     def on_line(line):
         m = re.search(r"… (\d+)s decoded", line)
-        if m:
-            frac = min(1.0, int(m.group(1)) / vs); elapsed = now() - t0
+        g = re.search(r"… gaze (\d+)/(\d+)", line)
+        if m:                                              # decode + face pass = first 80 % of the stage
+            frac = 0.8 * min(1.0, int(m.group(1)) / vs); elapsed = now() - t0
             set_progress(job, 0, frac, eta_s=(vs * RATE - elapsed) + FILL_EST_S + 20)
+        elif g:                                            # gaze pass = last 20 %
+            frac = 0.8 + 0.2 * int(g.group(1)) / max(int(g.group(2)), 1); elapsed = now() - t0
+            set_progress(job, 0, frac, eta_s=max(10, vs * RATE - elapsed) + FILL_EST_S + 20)
         elif "[bux]" in line:
             logj(job, line.replace("[bux] ", ""))
     rc, tail = run_proc(job, cmd, on_line)

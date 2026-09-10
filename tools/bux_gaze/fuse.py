@@ -125,11 +125,14 @@ def extract_frames(video, face, gaze, mp_hz=15, gaze_hz=10, limit_s=0, log=print
         rows.append(row)
         if len(rows) % 300 == 0:
             log(f"  … {t_ms/1000:.0f}s decoded, {len(crops)} gaze frames queued")
-    # gaze in batches
+    # gaze in chunks, with progress lines (the daemon/panel show them; the decode pass above reports "… Ns decoded")
     if crops:
-        h, v, sh, sv = gaze.predict(crops)
-        for k, ri in enumerate(crop_rows):
-            rows[ri].update(h_raw=float(h[k]), v_raw=float(v[k]), sharp_h=float(sh[k]), sharp_v=float(sv[k]))
+        CH = 256
+        for c0 in range(0, len(crops), CH):
+            h, v, sh, sv = gaze.predict(crops[c0:c0 + CH])
+            for k in range(len(h)):
+                rows[crop_rows[c0 + k]].update(h_raw=float(h[k]), v_raw=float(v[k]), sharp_h=float(sh[k]), sharp_v=float(sv[k]))
+            log(f"  … gaze {min(c0 + CH, len(crops))}/{len(crops)}")
     log(f"  frames: {n_dec} decoded, {len(rows)} MediaPipe, {len(crops)} L2CS in {time.time()-t0:.0f}s; pts gaps>200ms: {len(gaps)}")
     return rows, crops, gaps, plan
 

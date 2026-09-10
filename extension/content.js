@@ -373,18 +373,24 @@ async function startProcessing(name, files){
   showProc(r.json); procTimer=setInterval(()=>pollJob(r.json.id),2000);
 }
 // When the job is done, pull report.pdf from the service once and drop it next to the session in Downloads.
+const SAVED=new Set();
 async function saveReportOnce(job){
   try{
+    if(SAVED.has(job.id)) return; SAVED.add(job.id);          /* one save per job per tab, even while the fetch is in flight */
     const v=await new Promise(res=>chrome.storage.local.get("buxJob",res)); const bj=(v&&v.buxJob)||{};
     if(bj.saved===job.id) return;
     const name=bj.name||(job.folder||"").split("/").pop();
     const r=await fetch(`http://127.0.0.1:7331/jobs/${job.id}/report.pdf`); if(!r.ok) return;
     await save("boring-ux/"+name+"/report.pdf", await r.blob());
-    chrome.storage.local.set({buxJob:Object.assign({},bj,{saved:job.id})});
+    chrome.storage.local.set({buxJob:Object.assign({},bj,{saved:job.id,id:job.id})});
   }catch(_){}
 }
 // Re-attach to a job in progress (survives page refresh, new tabs, browser restart — the service keeps the job).
-try{ chrome.storage.local.get("buxJob",v=>{ if(v&&v.buxJob&&v.buxJob.id) pollJob(v.buxJob.id); }); }catch(_){}
+try{ chrome.storage.local.get("buxJob",v=>{ const bj=v&&v.buxJob;
+  if(!bj||!bj.id) return;
+  /* the report of this job was already saved: forget it, so a finished job stops re-appearing on every page load in every tab */
+  if(bj.saved===bj.id){ try{ chrome.storage.local.remove("buxJob"); }catch(_){} return; }
+  pollJob(bj.id); }); }catch(_){}
 
 addEventListener("beforeunload",()=>{ if(S.recording){ try{ S.recorders.forEach(r=>r.state!=="inactive"&&r.stop()); }catch(e){} } killCamera(); });
 

@@ -4,11 +4,13 @@
 #   bash tools/install-daemon.sh --remove   # uninstall
 set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-AI="${BUX_AI_DIR:-$HOME/Desktop/gaze-ai}"
+# NOTE: must live outside ~/Desktop, ~/Documents, ~/Downloads — macOS blocks background services from those folders.
+AI="${BUX_AI_DIR:-$HOME/.boring-ux}"
 PY="$AI/.venv/bin/python"
 LABEL="com.boringux.daemon"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
-mkdir -p "$HOME/Library/LaunchAgents" "$AI/logs" "$AI/jobs"
+mkdir -p "$HOME/Library/LaunchAgents" "$AI/logs" "$AI/jobs" "$AI/sessions"
+case "$AI" in "$HOME/Desktop"*|"$HOME/Documents"*|"$HOME/Downloads"*) echo "✗ $AI is inside a macOS-protected folder; use the default ~/.boring-ux (BUX_AI_DIR unset)"; exit 1;; esac
 
 if [ "${1:-}" = "--remove" ]; then
   launchctl bootout "gui/$(id -u)" "$PLIST" 2>/dev/null || true

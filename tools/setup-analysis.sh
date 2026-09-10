@@ -4,7 +4,8 @@
 #   bash tools/setup-analysis.sh --with-whisper # also the speech model (+1.6 GB) for transcripts
 # Everything goes to $BUX_AI_DIR (default ~/Desktop/gaze-ai). Re-runnable; skips what exists.
 set -euo pipefail
-DIR="${BUX_AI_DIR:-$HOME/Desktop/gaze-ai}"
+# Lives in ~/.boring-ux (NOT Desktop/Documents/Downloads: macOS blocks background services from those folders).
+DIR="${BUX_AI_DIR:-$HOME/.boring-ux}"
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WITH_WHISPER=0; WITH_DAEMON=0
 for a in "$@"; do case "$a" in --with-whisper) WITH_WHISPER=1;; --with-daemon) WITH_DAEMON=1;; --all) WITH_WHISPER=1; WITH_DAEMON=1;; esac; done

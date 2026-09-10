@@ -8,7 +8,16 @@ import os
 import cv2
 import numpy as np
 
-MODELS = os.environ.get("BUX_MODELS", os.path.expanduser("~/Desktop/gaze-ai/models"))
+def _models_dir():
+    if os.environ.get("BUX_MODELS"):
+        return os.environ["BUX_MODELS"]
+    for p in (os.environ.get("BUX_AI_DIR"), "~/.boring-ux", "~/Desktop/gaze-ai"):
+        if p and os.path.isfile(os.path.expanduser(os.path.join(p, "models", "face_landmarker.task"))):
+            return os.path.expanduser(os.path.join(p, "models"))
+    return os.path.expanduser("~/.boring-ux/models")
+
+
+MODELS = _models_dir()
 L2CS_WEIGHTS = os.path.join(MODELS, "L2CSNet_gaze360.pkl")
 MP_MODEL = os.path.join(MODELS, "face_landmarker.task")
 

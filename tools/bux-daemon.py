@@ -30,17 +30,21 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 VERSION = "0.1.0"
 HOME = os.path.expanduser("~")
-AI = os.environ.get("BUX_AI_DIR", os.path.join(HOME, "Desktop", "gaze-ai"))
+# Everything the service reads/writes lives OUTSIDE Desktop/Documents/Downloads: macOS denies those folders to
+# background services without a manual "Full Disk Access" grant. Sessions are uploaded here by the extension.
+AI = os.environ.get("BUX_AI_DIR") or (os.path.join(HOME, ".boring-ux") if not os.path.isdir(os.path.join(HOME, "Desktop", "gaze-ai", ".venv")) or os.path.isdir(os.path.join(HOME, ".boring-ux", ".venv")) else os.path.join(HOME, "Desktop", "gaze-ai"))
 REPO = os.environ.get("BUX_REPO", os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 PY = os.path.join(AI, ".venv", "bin", "python")
-JOBS = os.path.join(AI, "jobs"); LOGS = os.path.join(AI, "logs")
+JOBS = os.path.join(AI, "jobs"); LOGS = os.path.join(AI, "logs"); SESSIONS = os.path.join(AI, "sessions")
+MAX_UPLOAD = 2 * 1024 ** 3
 PORT = int(os.environ.get("BUX_PORT", "7331"))
 CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 RATE = 0.30            # measured: analysis wall-clock ≈ 0.30 × video length on Apple Silicon (GPU)
 FILL_EST_S = 150       # typical claude fill time
 STAGES = [("analyze", "Analyzing eyes, face & expressions", 0.62), ("scaffold", "Building the report structure", 0.03),
           ("fill", "Writing findings with Claude", 0.28), ("pdf", "Rendering the PDF", 0.04), ("open", "Opening the report", 0.03)]
-os.makedirs(JOBS, exist_ok=True); os.makedirs(LOGS, exist_ok=True)
+for _d in (JOBS, LOGS, SESSIONS):
+    os.makedirs(_d, exist_ok=True)
 
 LOCK = threading.Lock()
 JOBSTATE = {}          # id -> job dict
@@ -112,7 +116,8 @@ def wait_for_files(job):
 
 
 def run_proc(job, cmd, on_line=None, timeout=3600):
-    env = dict(os.environ, PATH="/opt/homebrew/bin:/usr/local/bin:" + os.environ.get("PATH", ""), PYTORCH_ENABLE_MPS_FALLBACK="1")
+    env = dict(os.environ, PATH="/opt/homebrew/bin:/usr/local/bin:" + os.environ.get("PATH", ""), PYTORCH_ENABLE_MPS_FALLBACK="1",
+               BUX_AI_DIR=AI, BUX_MODELS=os.path.join(AI, "models"))
     p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env, cwd=REPO)
     CTRL[job["id"]]["proc"] = p
     tail = []
@@ -231,6 +236,7 @@ def stage_fill(job):
     if not mapping:
         job.setdefault("warnings", []).append("Claude returned no usable JSON — report contains the data scaffold only")
     filled = re.sub(r"\{\{([A-Z_0-9]+)\}\}", lambda mm: str(mapping.get(mm.group(1), "")), html)
+    filled = re.sub(r"<!--.*?-->", "", filled, flags=re.S)          # drop the scaffold's template/instruction comments
     open(os.path.join(A, "report-filled.html"), "w", encoding="utf-8").write(filled)
     job["filled_placeholders"] = len([k for k in names if mapping.get(k)])
     return "ok"
@@ -318,19 +324,47 @@ class H(BaseHTTPRequestHandler):
         m = re.match(r"^/jobs/([\w-]+)$", p)
         if m and m.group(1) in JOBSTATE:
             return self._send(200, JOBSTATE[m.group(1)])
+        # the finished report, fetched by the extension and saved into ~/Downloads (the service itself can't write there)
+        m = re.match(r"^/jobs/([\w-]+)/report\.(pdf|html)$", p)
+        if m and m.group(1) in JOBSTATE:
+            job = JOBSTATE[m.group(1)]; path = job.get("report_pdf" if m.group(2) == "pdf" else "report_html")
+            if path and os.path.exists(path):
+                data = open(path, "rb").read()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/pdf" if m.group(2) == "pdf" else "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(data))); self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers(); self.wfile.write(data); return
+            return self._send(404, dict(error="report not ready"))
         self._send(404, dict(error="not found"))
 
     def do_POST(self):
         n = int(self.headers.get("Content-Length") or 0)
+        p = self.path.split("?")[0]
+        # Raw file upload from the extension: POST /sessions/<name>/<file>  (body = file bytes)
+        m = re.match(r"^/sessions/([A-Za-z0-9._\-]{1,120})/([A-Za-z0-9._\-]{1,80})$", p)
+        if m:
+            if n > MAX_UPLOAD:
+                return self._send(413, dict(error="file too large"))
+            d = os.path.join(SESSIONS, m.group(1)); os.makedirs(d, exist_ok=True)
+            dest = os.path.join(d, m.group(2)); remaining = n
+            with open(dest, "wb") as f:
+                while remaining > 0:
+                    chunk = self.rfile.read(min(remaining, 8 * 1024 * 1024))
+                    if not chunk:
+                        break
+                    f.write(chunk); remaining -= len(chunk)
+            return self._send(200, dict(ok=True, file=dest, bytes=n))
         try:
             body = json.loads(self.rfile.read(n) or b"{}")
         except json.JSONDecodeError:
             body = {}
-        p = self.path.split("?")[0]
         if p == "/jobs":
-            folder = body.get("folder") or (os.path.join(HOME, "Downloads", body.get("downloads_rel", "")) if body.get("downloads_rel") else None)
+            if body.get("session"):
+                folder = os.path.join(SESSIONS, re.sub(r"[^A-Za-z0-9._\-]", "_", body["session"]))
+            else:
+                folder = body.get("folder") or (os.path.join(HOME, "Downloads", body.get("downloads_rel", "")) if body.get("downloads_rel") else None)
             if not folder:
-                return self._send(400, dict(error="folder or downloads_rel required"))
+                return self._send(400, dict(error="session, folder or downloads_rel required"))
             folder = os.path.abspath(os.path.expanduser(folder))
             if not folder.startswith(HOME):
                 return self._send(400, dict(error="folder must be under the home directory"))

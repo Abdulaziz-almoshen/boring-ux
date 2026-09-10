@@ -29,7 +29,8 @@ def transcribe(session, out_dir, model_path, lang):
     if not os.path.exists(audio):
         return None, ["transcript_missing"]
     if not model_path:
-        cands = glob.glob(os.path.expanduser("~/Desktop/gaze-ai/models/ggml-*.bin")) + glob.glob(os.path.expanduser("~/.cache/whisper*/ggml-*.bin"))
+        from .models import MODELS as _MODELS
+        cands = glob.glob(os.path.join(_MODELS, "ggml-*.bin")) + glob.glob(os.path.expanduser("~/.cache/whisper*/ggml-*.bin"))
         cands = [c for c in cands if "tiny" not in c or len(cands) == 1]
         model_path = cands[0] if cands else None
     if not model_path or not os.path.exists(model_path):

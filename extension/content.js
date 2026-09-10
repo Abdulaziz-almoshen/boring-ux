@@ -254,17 +254,20 @@ async function stop(){
   const host=(location.hostname||"site").replace(/[^a-z0-9.-]/gi,"_");
   const folder=`boring-ux/${host}-${stamp}`;
   const m=mime();
-  const results=[];
-  results.push(await dl(folder+"/gaze.csv", csv(["t_ms","x","y","h_region","cell"], S.gaze.map(g=>[g.t,g.x,g.y,g.col,g.cell]))));
-  results.push(await dl(folder+"/mouse.csv", csv(["t_ms","x","y"], S.mouse.map(g=>[g.t,g.x,g.y]))));
-  results.push(await dl(folder+"/events.csv", csv(["t_ms","type","detail","gazeRegion","extra","x","y","clickable","rect"],
-    S.events.map(e=>[e.t,e.type,e.txt||e.title||e.note||"",e.gazeRegion||"",e.url||e.pct||"",e.x??"",e.y??"",e.clickable===undefined?"":(e.clickable?1:0),e.rect?e.rect.join(" "):""]))));
-  results.push(await dl(folder+"/session.json", JSON.stringify(summary(),null,2)));
-  results.push(await dl(folder+"/SESSION-AI.md", aiBundle()));
-  if(S.chunks.face.length) results.push(await dlBlob(folder+"/face.webm", new Blob(S.chunks.face,{type:m})));
-  if(S.chunks.audio.length) results.push(await dlBlob(folder+"/audio.webm", new Blob(S.chunks.audio,{type:"audio/webm"})));
-  if(S.chunks.screen.length) results.push(await dlBlob(folder+"/screen.webm", new Blob(S.chunks.screen,{type:m})));
+  // Build every file once: saved to Downloads (the user's copy) AND uploaded to the local processing service.
+  const files={}; const txt=s=>new Blob([s],{type:"text/plain"});
+  files["gaze.csv"]=txt(csv(["t_ms","x","y","h_region","cell"], S.gaze.map(g=>[g.t,g.x,g.y,g.col,g.cell])));
+  files["mouse.csv"]=txt(csv(["t_ms","x","y"], S.mouse.map(g=>[g.t,g.x,g.y])));
+  files["events.csv"]=txt(csv(["t_ms","type","detail","gazeRegion","extra","x","y","clickable","rect"],
+    S.events.map(e=>[e.t,e.type,e.txt||e.title||e.note||"",e.gazeRegion||"",e.url||e.pct||"",e.x??"",e.y??"",e.clickable===undefined?"":(e.clickable?1:0),e.rect?e.rect.join(" "):""])));
+  files["session.json"]=txt(JSON.stringify(summary(),null,2));
+  files["SESSION-AI.md"]=txt(aiBundle());
+  if(S.chunks.face.length) files["face.webm"]=new Blob(S.chunks.face,{type:m});
+  if(S.chunks.audio.length) files["audio.webm"]=new Blob(S.chunks.audio,{type:"audio/webm"});
+  if(S.chunks.screen.length) files["screen.webm"]=new Blob(S.chunks.screen,{type:m});
   S.chunks={face:[],audio:[],screen:[]};
+  const results=[];
+  for(const [name,blob] of Object.entries(files)) results.push(await dlBlob(folder+"/"+name, blob));
   // 4) reset the panel to the initial state (must Enable camera again for a new session)
   $("bux-cam").disabled=false; $("bux-cam").textContent="Enable camera";
   $("bux-cal-btn").disabled=true; $("bux-cam-view").disabled=true; $("bux-start").disabled=true; $("bux-stop").disabled=true; $("bux-selftest").disabled=true;
@@ -273,7 +276,7 @@ async function stop(){
   const failed=results.filter(r=>r&&!r.ok);
   if(failed.length===0){
     setHint("✅ Saved as ONE folder → Downloads/"+folder+"/ ("+S.gaze.length+" gaze, "+S.events.length+" events). Camera off.");
-    startProcessing(folder);   // hand the session to the local processing service → panel becomes the processing view
+    startProcessing(`${host}-${stamp}`, files);   // upload to the local processing service → panel becomes the processing view
   }else{
     const reason=failed[0].err||"unknown";
     const needsReload=/receiving end|establish connection|no response/i.test(reason);
@@ -291,8 +294,9 @@ function showProc(job){
   fill.style.width=(job.status==="done"?100:pct)+"%";
   const labels={queued:"Queued…",running:job.stage_label||"Processing…",paused:"Paused",done:"Report ready ✓",error:"Something went wrong",cancelled:"Cancelled"};
   $("bux-proc-stage").textContent=(labels[job.status]||job.status)+(job.status==="running"?` · ${pct}%`:"");
-  const rel=(job.folder||"").split("/Downloads/")[1]||job.folder||"";
-  $("bux-proc-eta").textContent=job.status==="running"||job.status==="queued"?fmtEta(job.eta_s):job.status==="done"?"Opened automatically · Downloads/"+rel:job.status==="error"?(job.error||"see the service log"):job.status==="paused"?"Paused — resume when you're ready":"";
+  const rel=(job.folder||"").split("/").pop()||"";
+  $("bux-proc-eta").textContent=job.status==="running"||job.status==="queued"?fmtEta(job.eta_s):job.status==="done"?"Opened · saved to Downloads/boring-ux/"+rel+"/report.pdf":job.status==="error"?(job.error||"see the service log"):job.status==="paused"?"Paused — resume when you're ready":"";
+  if(job.status==="done") saveReportOnce(job);
   $("bux-proc-log").textContent=(job.warnings||[]).concat((job.log||[]).slice(-2)).join(" · ");
   const pb=$("bux-proc-pause"), st=job.status;
   pb.textContent=st==="paused"?"▶ Resume":(st==="running"||st==="queued")?"⏸ Pause":(st==="error"||st==="cancelled")?"↻ Retry":"New session";
@@ -309,13 +313,36 @@ async function pollJob(id){
   showProc(r.json);
   if(!procTimer && ["queued","running","paused"].includes(r.json.status)) procTimer=setInterval(()=>pollJob(id),2000);
 }
-async function startProcessing(folder){
+// macOS blocks background services from reading ~/Downloads, so the session is UPLOADED to the service over
+// localhost (it lives in ~/.boring-ux/sessions/<name>/); the finished report is fetched back and saved to Downloads.
+async function startProcessing(name, files){
   const h=await daemon("GET","/health");
   if(!h.ok){ setHint("Saved ✓. Automatic processing is off — the local service isn't running. Run once: bash tools/install-daemon.sh (or ask Claude Code). You can also analyze later with tools/bux-analyze-video.py."); return; }
-  const r=await daemon("POST","/jobs",{downloads_rel:folder, product:location.hostname});
-  if(!r.ok||!r.json||!r.json.id){ setHint("Saved ✓ but the processing service refused the job: "+(r.err||(r.json&&r.json.error)||r.status)); return; }
-  try{ chrome.storage.local.set({buxJob:{id:r.json.id,folder}}); }catch(_){}
+  $("bux-proc").style.display="block"; PANEL_BTNS.forEach(id=>$(id).style.display="none");
+  $("bux-proc-stage").textContent="Handing the session to the processing service…"; $("bux-proc-fill").style.width="2%"; $("bux-proc-eta").textContent="";
+  try{
+    let done=0, total=Object.keys(files).length;
+    for(const [fname,blob] of Object.entries(files)){
+      const r=await fetch(`http://127.0.0.1:7331/sessions/${encodeURIComponent(name)}/${encodeURIComponent(fname)}`,{method:"POST",body:blob});
+      if(!r.ok) throw new Error(fname+" → HTTP "+r.status);
+      done++; $("bux-proc-fill").style.width=(2+6*done/total)+"%";
+    }
+  }catch(e){ $("bux-proc-stage").textContent="Couldn't hand the files to the processing service"; $("bux-proc-eta").textContent=String(e&&e.message||e)+" — the session is still saved in Downloads/boring-ux/"+name; return; }
+  const r=await daemon("POST","/jobs",{session:name, product:location.hostname});
+  if(!r.ok||!r.json||!r.json.id){ $("bux-proc-stage").textContent="The processing service refused the job"; $("bux-proc-eta").textContent=String(r.err||(r.json&&r.json.error)||r.status); return; }
+  try{ chrome.storage.local.set({buxJob:{id:r.json.id,name}}); }catch(_){}
   showProc(r.json); procTimer=setInterval(()=>pollJob(r.json.id),2000);
+}
+// When the job is done, pull report.pdf from the service once and drop it next to the session in Downloads.
+async function saveReportOnce(job){
+  try{
+    const v=await new Promise(res=>chrome.storage.local.get("buxJob",res)); const bj=(v&&v.buxJob)||{};
+    if(bj.saved===job.id) return;
+    const name=bj.name||(job.folder||"").split("/").pop();
+    const r=await fetch(`http://127.0.0.1:7331/jobs/${job.id}/report.pdf`); if(!r.ok) return;
+    await save("boring-ux/"+name+"/report.pdf", await r.blob());
+    chrome.storage.local.set({buxJob:Object.assign({},bj,{saved:job.id})});
+  }catch(_){}
 }
 // Re-attach to a job in progress (survives page refresh, new tabs, browser restart — the service keeps the job).
 try{ chrome.storage.local.get("buxJob",v=>{ if(v&&v.buxJob&&v.buxJob.id) pollJob(v.buxJob.id); }); }catch(_){}

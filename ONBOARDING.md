@@ -44,5 +44,6 @@ reading ~/Desktop). Whenever the repo is updated (git pull), re-run: bash tools/
 2. The panel turns into **Processing…** with stages, progress and time remaining. You can close the tab; it continues, and any tab shows the same job. Pause/resume if you need the Mac.
 3. When done, `report.pdf` opens and is saved next to the recording in `~/Downloads/boring-ux/<site>-<time>/`. (The service keeps its working copy and the full `analysis/` folder in `~/.boring-ux/sessions/<site>-<time>/`.)
 
-Timing on an Apple-Silicon Mac, measured: a 14-minute session took **≈ 12 minutes** end to end — about 0.4× the recording
-length for the analysis plus ~6 minutes for Claude to write the findings. Short sessions (2–3 min) finish in 3–5 minutes.
+Timing on an Apple-Silicon Mac (24 GB), measured: a 14-minute session takes **≈ 20 minutes** end to end — about 0.4× the recording
+length for the analysis plus ≈ 15 minutes for the local model (Qwen3 14B) to write the findings in five focused passes.
+Short sessions (2–3 min) finish in about 12–15 minutes; the writing time is nearly constant, the analysis scales with length.

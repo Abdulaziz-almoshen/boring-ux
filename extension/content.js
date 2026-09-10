@@ -205,7 +205,7 @@ window.addEventListener("scroll",()=>{ if(!S.recording)return; const y=scrollY||
 function announce(){ if(!S.recording)return; const p={type:"page",url:location.href,title:document.title}; ev(p); S.pages.push({url:location.href,title:document.title,startT:Math.round(nowRel()),endT:null}); }
 ["pushState","replaceState"].forEach(m=>{ const o=history[m]; history[m]=function(){ const r=o.apply(this,arguments); setTimeout(announce,0); return r; }; });
 addEventListener("popstate",announce);
-document.addEventListener("visibilitychange",()=>{ if(!S.recording)return; if(document.hidden){ ev({type:"tracking_paused"}); } else { ev({type:"tracking_resumed"}); setHint("⚠ The tab was hidden — the camera freezes while this tab is not in front. Stay on this tab while recording."); }});
+document.addEventListener("visibilitychange",()=>{ if(!S.recording)return; if(document.hidden){ ev({type:"tracking_paused"}); } else { ev({type:"tracking_resumed"}); setHint("Recording continues in other tabs — the live gaze dot only updates while this tab is in front."); }});
 
 /* ---------- record ---------- */
 function mime(){ return ["video/webm;codecs=vp9,opus","video/webm;codecs=vp8,opus","video/webm"].find(m=>MediaRecorder.isTypeSupported(m))||""; }
@@ -230,10 +230,13 @@ $("bux-start").onclick = async () => {
   if(screen){ const sv=screen.getVideoTracks()[0]; sv.addEventListener("ended",()=>S.recording&&stop());
     rec(new MediaStream([sv,...(S.mic?[S.mic.getAudioTracks()[0].clone()]:[])]),"screen",2500000); }
   announce();
+  /* hand the session to the service worker: it instruments every other tab so the report reflects the tab the participant
+     actually uses, not this one. S.startWall is the shared epoch base — every context stamps Date.now() against it. */
+  try{ chrome.runtime.sendMessage({bux:"session-start", startWall:S.startWall}); }catch(_){}
   // lock the panel to recording state — Start/camera/calibrate off, only Stop is live
   $("bux-start").disabled=true; $("bux-cam").disabled=true; $("bux-cal-btn").disabled=true; $("bux-cam-view").disabled=true;
   $("bux-stop").disabled=false; $("bux-selftest").disabled=false; $("bux-status").textContent="REC ●";
-  setHint("Recording… stay on this tab. Press Stop to save.");
+  setHint("Recording… work in ANY tab or window — every tab is recorded. Come back here and press Stop to save.");
 };
 $("bux-stop").onclick = stop;
 
@@ -296,11 +299,19 @@ async function stop(){
   const folder=`boring-ux/${host}-${stamp}`;
   const m=mime();
   // Build every file once: saved to Downloads (the user's copy) AND uploaded to the local processing service.
+  /* pull the other tabs' events and mouse rows from the worker and merge them into this session's timeline */
+  let X={events:[],mouse:[],contexts:{}};
+  try{ X=await new Promise(res=>chrome.runtime.sendMessage({bux:"session-stop"},r=>{ void chrome.runtime.lastError; res(r||{events:[],mouse:[],contexts:{}}); })); }catch(_){}
+  const otherEv=(X.events||[]).map(e=>({t:e.t,type:e.type,txt:e.txt||"",url:e.url||"",x:e.x,y:e.y,clickable:e.clickable,rect:e.rect,pct:e.pct,tab:e.tab}));
+  const otherMouse=(X.mouse||[]).map(m=>({t:m.t,x:m.x,y:m.y,tab:m.tab}));
+  S.events=S.events.concat(otherEv).sort((a,b)=>a.t-b.t);
+  S.mouse=S.mouse.concat(otherMouse).sort((a,b)=>a.t-b.t);
+  S.contexts=X.contexts||{};
   const files={}; const txt=s=>new Blob([s],{type:"text/plain"});
   files["gaze.csv"]=txt(csv(["t_ms","x","y","h_region","cell"], S.gaze.map(g=>[g.t,g.x,g.y,g.col,g.cell])));
-  files["mouse.csv"]=txt(csv(["t_ms","x","y"], S.mouse.map(g=>[g.t,g.x,g.y])));
-  files["events.csv"]=txt(csv(["t_ms","type","detail","gazeRegion","extra","x","y","clickable","rect"],
-    S.events.map(e=>[e.t,e.type,e.txt||e.title||e.note||"",e.gazeRegion||"",e.url||e.pct||"",e.x??"",e.y??"",e.clickable===undefined?"":(e.clickable?1:0),e.rect?e.rect.join(" "):""])));
+  files["mouse.csv"]=txt(csv(["t_ms","x","y","tab"], S.mouse.map(g=>[g.t,g.x,g.y,g.tab??""])));
+  files["events.csv"]=txt(csv(["t_ms","type","detail","gazeRegion","extra","x","y","clickable","rect","tab","url"],
+    S.events.map(e=>[e.t,e.type,e.txt||e.title||e.note||"",e.gazeRegion||"",e.url||e.pct||"",e.x??"",e.y??"",e.clickable===undefined?"":(e.clickable?1:0),e.rect?e.rect.join(" "):"",e.tab??"",e.url||""])));
   files["session.json"]=txt(JSON.stringify(summary(),null,2));
   if((S.captions||[]).length) files["captions.jsonl"]=txt(S.captions.map(c=>JSON.stringify(c)).join("\n"));
   files["SESSION-AI.md"]=txt(aiBundle());
@@ -406,6 +417,9 @@ function summary(){ const g=S.regionTime, gt=g.L+g.C+g.R||1;
   return { tool:"Boring UX extension", site:location.href, startedAt:new Date(S.startWall).toISOString(),
     durationSec:+(nowRel()/1000).toFixed(2), calibrated:S.calibrated, gazeAccuracyPx:S.accuracyPx,
     viewport:{stageW:innerWidth,stageH:innerHeight,winW:innerWidth,winH:innerHeight},
+    /* every tab the participant used, so the analysis can place a click that happened in another tab's viewport */
+    contexts:Object.values(S.contexts||{}).map(c=>({tab:c.tabId,url:c.url,title:c.title,vw:c.vw,vh:c.vh,dpr:c.dpr,first_t:c.first_t,last_t:c.last_t})),
+    panelTabOnly:!Object.keys(S.contexts||{}).length,
     screen:{width:screen.width,height:screen.height,availHeight:screen.availHeight}, dpr:devicePixelRatio,
     window:{screenX,screenY,outerWidth,outerHeight,innerWidth,innerHeight},
     mic:S.micStats?{peakDb:+S.micStats.peakDb.toFixed(1),talkSec:+S.micStats.talkSec.toFixed(1)}:null, liveCaptions:(S.captions||[]).length,

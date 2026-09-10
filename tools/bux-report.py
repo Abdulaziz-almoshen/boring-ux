@@ -50,7 +50,8 @@ code{background:#eef1f6;padding:1px 5px;border-radius:4px;font-size:12.5px}
 """
 COL_COLOR = {"L": "#e8871e", "C": "#4f8cff", "R": "#0a9d54", None: "#cbd2df", "": "#cbd2df", "?": "#cbd2df"}
 MOMENT_COLOR = {"SEARCHING": "#e8871e", "CONFUSION": "#d33", "FRUSTRATION": "#8b0000", "LOOK_AWAY": "#9aa3b5", "CAMERA_FROZEN": "#5b6b8c", "DEAD_CLICKS": "#c0392b", "FOUND_THEN_ACTED": "#0a9d54", "MISS_THEN_CORRECT": "#b06f00"}
-TIER_WORDS = {"regions": "gaze regions are validated for this session (click-consistency lift ≥ 0.5) — column and half statements may be made firmly, 3×3 cells with 'probably'",
+TIER_WORDS = {
+    "no_gaze": "the camera did not record in this session, so there is NO attention data at all — every finding below comes from what the participant said, the mouse, the clicks and the screen recording","regions": "gaze regions are validated for this session (click-consistency lift ≥ 0.5) — column and half statements may be made firmly, 3×3 cells with 'probably'",
               "likely": "gaze regions are partially validated (lift 0.25–0.5) — use 'likely' for columns; avoid specific-cell claims",
               "unvalidated": "gaze regions are NOT validated for this session — every gaze statement must read 'estimated (unvalidated)'; lean on mouse, clicks, transcript, and looking-away/keyboard events"}
 

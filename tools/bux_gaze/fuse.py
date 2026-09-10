@@ -405,6 +405,8 @@ def per_second(rows, mouse, clicks, rage, thrash, pages, transcript, vp, dur_s, 
         rec["gaze_state"] = states.most_common(1)[0][0] if states else ("no_face" if face_present < 0.5 else "on_screen")
         if face_present < 0.5:
             rec["gaze_state"] = "no_face"
+        if quality_ctx.get("no_camera"):
+            rec["gaze_state"] = "no_camera"; rec["tab_hidden"] = 1         # the camera never recorded: no attention data at all, and never a look-away
         if any(a <= sec * 1000 < b for a, b in quality_ctx.get("frozen", [])):
             rec["gaze_state"] = "camera_frozen"; rec["tab_hidden"] = 1     # no video frames (tab hidden / app switch) — not a look-away
         # switches within the second (10 Hz majority)

@@ -86,7 +86,8 @@ def run(args):
     log(f"session {os.path.basename(session)} | display {disp['name']} {disp['W']}x{disp['H']}cm | viewport {vp.inner_w}x{vp.inner_h} | clicks {len(clicks)} | mouse rows {len(mouse or [])}")
 
     # 1–2 video + transcript
-    video = F.prepare_video(session, out_dir)
+    raw_face = os.path.join(session, "face.webm")
+    video = F.prepare_video(session, out_dir) if (os.path.exists(raw_face) and os.path.getsize(raw_face) >= 20000) else raw_face
     srt, tflags = transcribe(session, out_dir, args.whisper_model, args.lang); flags += tflags
     transcript = F.load_transcript(session, out_dir)
     if transcript is None:
@@ -97,88 +98,104 @@ def run(args):
     else:
         log(f"transcript: {len(transcript)} speech segments")
 
-    # 3–4 models + extraction
-    face = FaceModel(); gaze = GazeModel(device=args.device, fp16=not args.no_fp16)
-    log(f"models ready (L2CS on {gaze.dev}, fp16={gaze.fp16})")
-    rows, crops, gaps, plan = F.extract_frames(video, face, gaze, mp_hz=args.mp_fps, gaze_hz=args.fps, limit_s=args.limit_s, log=log)
-    flags += plan.get("flags", [])
-    if not rows:
-        sys.exit("no frames decoded")
-    img_w = next((r["img_w"] for r in rows if r.get("face")), 640); img_h = next((r["img_h"] for r in rows if r.get("face")), 480)
-    f_px, fflags = G.focal_px(img_w, args.fpx); flags += fflags
-    signs = dict(l2cs_channel_test=gaze.flip_selftest(crops[:30]))
-    log(f"flip self-test: {signs['l2cs_channel_test']}")
-    if signs["l2cs_channel_test"]["status"] == "FAIL":
-        # Do not abort the whole session for a self-test: keep transcript/mouse/click analysis, flag the gaze channel as suspect.
-        log("WARNING: L2CS channel assignment FAILED the flip self-test — continuing; gaze flagged 'l2cs_channel_fail' (treat as unvalidated)")
-        flags.append("l2cs_channel_fail")
-    ear_thr = F.mark_blinks(rows)
-
-    # 5 raw mapping, self-centring prior
-    F.map_frames(rows, vp, f_px, img_w / 2, img_h / 2, b=(0, 0), assume_mirrored=args.assume_mirrored)
-    for r in rows:
-        r["conf"] = F.gaze_conf(r, img_w)
-    valid = [r for r in rows if r.get("pt_cm") and r["conf"] >= 0.3]
-    E_med = np.median([r["E_C"] for r in valid], axis=0) if valid else np.array([0, 0, 55.0])
-    bh, bv, raw_h, raw_v = G.self_centering_bias([r["pt_cm"] for r in valid], E_med, vp.W, vp.H, vp.y_off)
-    b0 = (bh, bv)
-    calib = dict(self_centering_bias_deg=[round(math.degrees(bh), 2), round(math.degrees(bv), 2)],
-                 self_centering_raw_deg=[round(math.degrees(raw_h), 2), round(math.degrees(raw_v), 2)],
-                 self_centering_clipped=bool(abs(raw_h) > math.radians(5) or abs(raw_v) > math.radians(5)),
-                 click=None, applied="self_centering")
-    if calib["self_centering_clipped"]:
-        flags.append("bias_clipped_needs_clicks")
-    b = b0
-    # 6 click residuals
-    if clicks and not args.no_click_calib:
-        F.map_frames(rows, vp, f_px, img_w / 2, img_h / 2, b=(0, 0), assume_mirrored=args.assume_mirrored)
-        res, pairs = F.click_residuals(rows, clicks, vp, E_med)
-        cb = G.click_bias(res); calib["click"] = {k: (round(math.degrees(v), 2) if k in ("b_h", "b_v") else v) for k, v in cb.items()}
-        if cb["applied"]:
-            b = (cb["b_h"], cb["b_v"]); calib["applied"] = "click_bias"
-        if len(pairs) >= 10:
-            rho = spearman([p[0] for p in pairs], [p[1] for p in pairs])
-            signs["orientation"] = dict(status="INVERTED" if rho is not None and rho < -0.3 else "OK" if rho is not None and rho > 0.3 else "UNTESTED", rho=None if rho is None else round(rho, 3), n=len(pairs))
-        else:
-            signs["orientation"] = dict(status="UNTESTED", n=len(pairs))
-        flags += cb["flags"]
+    # A session recorded without a camera (or whose face video never received frames) still has speech, mouse, clicks and the
+    # screen recording. Analyse those and say plainly that there is no eye data, instead of failing the whole session.
+    no_camera = (not os.path.exists(video)) or os.path.getsize(video) < 20000
+    if no_camera:
+        log("no usable face.webm — analysing speech, mouse and clicks only (this session has NO eye data)")
+        flags.append("camera_missing")
+        rows, crops, gaps = [], [], []; plan = dict(mode="none", flags=[]); ear_arr = None
+        signs = dict(l2cs_channel_test=dict(status="skipped", note="no face video"))
+        calib = dict(note="no face video: no gaze mapping"); ear_thr = 0.0; f_px = 0.0; pitch_med = 0.0; frozen = []
+        dur_s = float(S.get("durationSec") or 0)
+        if not dur_s:
+            ts = [float(e["t_ms"]) for e in (events or [])] + [float(m["t_ms"]) for m in (mouse or [])] + [t["end"] for t in (transcript or [])]
+            dur_s = (max(ts) / 1000) if ts else 0
     else:
-        signs["orientation"] = dict(status="UNTESTED", n=0)
-    # 7 corrected re-map + states
-    F.map_frames(rows, vp, f_px, img_w / 2, img_h / 2, b=b, assume_mirrored=args.assume_mirrored)
-    for r in rows:
-        r["conf"] = F.gaze_conf(r, img_w)
-    # cross-path consistency (§2.6 item 3)
-    fr = [r for r in rows if r.get("h") is not None]
-    if len(fr) >= 30:
-        medR = np.median([r["hR"] for r in fr]); medL = np.median([r["hL"] for r in fr])
-        iris_right = [-(((r["hR"] - medR) + (r["hL"] - medL)) / 2) for r in fr]
-        hs = [r["h"] for r in fr]; vs = [r["v"] for r in fr]
-        c1 = float(np.corrcoef(hs, iris_right)[0, 1]); c2 = float(np.corrcoef(hs, [-r["H_bl"] for r in fr])[0, 1]); c3 = float(np.corrcoef(vs, [r["V_bl"] for r in fr])[0, 1])
-        signs["cross_path"] = dict(corr_h_iris_right=round(c1, 2), corr_h_blend=round(c2, 2), corr_v_blend=round(c3, 2), status="ok" if (c1 > 0.3 and c2 > 0.3) else "weak")
-    # explicit LEFT/RIGHT/TOP/BOTTOM prompt, if the session recorded one (§7.1)
-    st = F.evaluate_selftest(rows, F.selftest_intervals(events))
-    if st:
-        signs["selftest"] = st
-        log(f"sign self-test (prompt): {st.get('status')} horizontal={st.get('horizontal')} vertical={st.get('vertical')}")
-        if st.get("status") == "FAIL":
-            flags.append("selftest_failed")
-            if st.get("horizontal", {}).get("status") == "INVERTED":
-                signs.setdefault("orientation", {})["status"] = "INVERTED"; signs["orientation"]["source"] = "selftest"
-    if signs.get("orientation", {}).get("status") == "INVERTED":
-        flags.append("orientation_inverted")
+        # 3–4 models + extraction
+        face = FaceModel(); gaze = GazeModel(device=args.device, fp16=not args.no_fp16)
+        log(f"models ready (L2CS on {gaze.dev}, fp16={gaze.fp16})")
+        rows, crops, gaps, plan = F.extract_frames(video, face, gaze, mp_hz=args.mp_fps, gaze_hz=args.fps, limit_s=args.limit_s, log=log)
+        flags += plan.get("flags", [])
+        if not rows:
+            sys.exit("no frames decoded")
+        img_w = next((r["img_w"] for r in rows if r.get("face")), 640); img_h = next((r["img_h"] for r in rows if r.get("face")), 480)
+        f_px, fflags = G.focal_px(img_w, args.fpx); flags += fflags
+        signs = dict(l2cs_channel_test=gaze.flip_selftest(crops[:30]))
+        log(f"flip self-test: {signs['l2cs_channel_test']}")
+        if signs["l2cs_channel_test"]["status"] == "FAIL":
+            # Do not abort the whole session for a self-test: keep transcript/mouse/click analysis, flag the gaze channel as suspect.
+            log("WARNING: L2CS channel assignment FAILED the flip self-test — continuing; gaze flagged 'l2cs_channel_fail' (treat as unvalidated)")
+            flags.append("l2cs_channel_fail")
+        ear_thr = F.mark_blinks(rows)
 
-    # 8 fuse
-    dur_s = rows[-1]["t_ms"] / 1000
-    pitch_med = float(np.median([math.degrees(r["head_pitch"]) for r in rows if r.get("face")])) if any(r.get("face") for r in rows) else 0
-    frozen = [(a, b) for a, b in gaps if b - a >= 1000]                      # ≥1 s without decoded frames = camera frozen (tab hidden / app switch)
-    secs = F.per_second(rows, mouse, clicks, rage, thrash, pages, transcript, vp, dur_s, dict(pitch_med=pitch_med, frozen=frozen))
+        # 5 raw mapping, self-centring prior
+        F.map_frames(rows, vp, f_px, img_w / 2, img_h / 2, b=(0, 0), assume_mirrored=args.assume_mirrored)
+        for r in rows:
+            r["conf"] = F.gaze_conf(r, img_w)
+        valid = [r for r in rows if r.get("pt_cm") and r["conf"] >= 0.3]
+        E_med = np.median([r["E_C"] for r in valid], axis=0) if valid else np.array([0, 0, 55.0])
+        bh, bv, raw_h, raw_v = G.self_centering_bias([r["pt_cm"] for r in valid], E_med, vp.W, vp.H, vp.y_off)
+        b0 = (bh, bv)
+        calib = dict(self_centering_bias_deg=[round(math.degrees(bh), 2), round(math.degrees(bv), 2)],
+                     self_centering_raw_deg=[round(math.degrees(raw_h), 2), round(math.degrees(raw_v), 2)],
+                     self_centering_clipped=bool(abs(raw_h) > math.radians(5) or abs(raw_v) > math.radians(5)),
+                     click=None, applied="self_centering")
+        if calib["self_centering_clipped"]:
+            flags.append("bias_clipped_needs_clicks")
+        b = b0
+        # 6 click residuals
+        if clicks and not args.no_click_calib:
+            F.map_frames(rows, vp, f_px, img_w / 2, img_h / 2, b=(0, 0), assume_mirrored=args.assume_mirrored)
+            res, pairs = F.click_residuals(rows, clicks, vp, E_med)
+            cb = G.click_bias(res); calib["click"] = {k: (round(math.degrees(v), 2) if k in ("b_h", "b_v") else v) for k, v in cb.items()}
+            if cb["applied"]:
+                b = (cb["b_h"], cb["b_v"]); calib["applied"] = "click_bias"
+            if len(pairs) >= 10:
+                rho = spearman([p[0] for p in pairs], [p[1] for p in pairs])
+                signs["orientation"] = dict(status="INVERTED" if rho is not None and rho < -0.3 else "OK" if rho is not None and rho > 0.3 else "UNTESTED", rho=None if rho is None else round(rho, 3), n=len(pairs))
+            else:
+                signs["orientation"] = dict(status="UNTESTED", n=len(pairs))
+            flags += cb["flags"]
+        else:
+            signs["orientation"] = dict(status="UNTESTED", n=0)
+        # 7 corrected re-map + states
+        F.map_frames(rows, vp, f_px, img_w / 2, img_h / 2, b=b, assume_mirrored=args.assume_mirrored)
+        for r in rows:
+            r["conf"] = F.gaze_conf(r, img_w)
+        # cross-path consistency (§2.6 item 3)
+        fr = [r for r in rows if r.get("h") is not None]
+        if len(fr) >= 30:
+            medR = np.median([r["hR"] for r in fr]); medL = np.median([r["hL"] for r in fr])
+            iris_right = [-(((r["hR"] - medR) + (r["hL"] - medL)) / 2) for r in fr]
+            hs = [r["h"] for r in fr]; vs = [r["v"] for r in fr]
+            c1 = float(np.corrcoef(hs, iris_right)[0, 1]); c2 = float(np.corrcoef(hs, [-r["H_bl"] for r in fr])[0, 1]); c3 = float(np.corrcoef(vs, [r["V_bl"] for r in fr])[0, 1])
+            signs["cross_path"] = dict(corr_h_iris_right=round(c1, 2), corr_h_blend=round(c2, 2), corr_v_blend=round(c3, 2), status="ok" if (c1 > 0.3 and c2 > 0.3) else "weak")
+        # explicit LEFT/RIGHT/TOP/BOTTOM prompt, if the session recorded one (§7.1)
+        st = F.evaluate_selftest(rows, F.selftest_intervals(events))
+        if st:
+            signs["selftest"] = st
+            log(f"sign self-test (prompt): {st.get('status')} horizontal={st.get('horizontal')} vertical={st.get('vertical')}")
+            if st.get("status") == "FAIL":
+                flags.append("selftest_failed")
+                if st.get("horizontal", {}).get("status") == "INVERTED":
+                    signs.setdefault("orientation", {})["status"] = "INVERTED"; signs["orientation"]["source"] = "selftest"
+        if signs.get("orientation", {}).get("status") == "INVERTED":
+            flags.append("orientation_inverted")
+
+        # 8 fuse
+        dur_s = rows[-1]["t_ms"] / 1000
+        pitch_med = float(np.median([math.degrees(r["head_pitch"]) for r in rows if r.get("face")])) if any(r.get("face") for r in rows) else 0
+        frozen = [(a, b) for a, b in gaps if b - a >= 1000]                      # ≥1 s without decoded frames = camera frozen (tab hidden / app switch)
+    secs = F.per_second(rows, mouse, clicks, rage, thrash, pages, transcript, vp, dur_s,
+                        dict(pitch_med=pitch_med, frozen=frozen, no_camera=no_camera))
     hidden_s = sum(1 for s_ in secs if s_.get("tab_hidden"))
-    if hidden_s:
+    if hidden_s and not no_camera:
         flags.append(f"camera_frozen_s={hidden_s}"); log(f"camera frozen (no video frames) for {hidden_s}s in {len(frozen)} gap(s) — excluded from attention/quality figures")
     expr = F.expressions(rows, secs)
     # 9 moments + click-consistency
-    cc = F.click_consistency(rows, clicks, vp) if clicks else dict(n=0, tier="unvalidated", note="no clicks")
+    cc = dict(n=0, tier="no_gaze", note="no face video") if no_camera else (
+        F.click_consistency(rows, clicks, vp) if clicks else dict(n=0, tier="unvalidated", note="no clicks"))
     if signs.get("orientation", {}).get("status") == "INVERTED":
         cc["tier"] = "unvalidated"
     moments = F.detect_moments(secs, clicks, vp)
@@ -200,7 +217,7 @@ def run(args):
     F.write_csv(os.path.join(out_dir, "expressions.csv"), expr, ecols)
     json.dump(dict(session=os.path.basename(session), moments=moments), open(os.path.join(out_dir, "moments.json"), "w"), ensure_ascii=False, indent=1)
     quality = dict(version=VERSION, session=os.path.basename(session), duration_s=round(dur_s, 1), display=disp, viewport=dict(w=vp.inner_w, h=vp.inner_h),
-                   f_px=round(f_px, 1), ear_blink_threshold=round(ear_thr, 3), frames=dict(mediapipe=len(rows), l2cs=len(crops), face_present_frac=round(float(np.mean([r.get("face", 0) for r in rows])), 3), pts_gaps_over_200ms=len(gaps), timing=plan),
+                   f_px=round(f_px, 1), ear_blink_threshold=round(ear_thr, 3), frames=dict(mediapipe=len(rows), l2cs=len(crops), face_present_frac=round(float(np.mean([r.get("face", 0) for r in rows])), 3) if rows else 0.0, pts_gaps_over_200ms=len(gaps), timing=plan),
                    signs=signs, calibration=calib, click_consistency=cc, grade_histogram=grades, gaze_usable_frac=round(usable, 3),
                    moments=dict((t, sum(1 for m in moments if m["type"] == t)) for t in ("SEARCHING", "FOUND_THEN_ACTED", "MISS_THEN_CORRECT", "LOOK_AWAY", "CAMERA_FROZEN", "DEAD_CLICKS", "CONFUSION", "FRUSTRATION")),
                    flags=sorted(set(flags)), params=vars(args),

@@ -101,18 +101,23 @@ def set_progress(job, stage_i, frac_in_stage, eta_s=None):
 # ---------------- stages ----------------
 def wait_for_files(job):
     """The extension posts right after it starts the downloads; wait for face.webm + session.json to land and settle."""
-    f = os.path.join(job["folder"], "face.webm"); s = os.path.join(job["folder"], "session.json")
+    s = os.path.join(job["folder"], "session.json")
+    def biggest():                      # the camera may not have recorded at all: wait on whatever media the session does have
+        c = [os.path.join(job["folder"], n) for n in ("face.webm", "screen.webm", "audio.webm")]
+        c = [p_ for p_ in c if os.path.exists(p_)]
+        return max(c, key=os.path.getsize) if c else None
     last, stable, t0 = -1, 0, now()
     while now() - t0 < 120:
         if CTRL[job["id"]]["cancel"]:
             return False
-        if os.path.exists(f) and os.path.exists(s):
+        f = biggest()
+        if f and os.path.exists(s):
             sz = os.path.getsize(f)
             stable = stable + 1 if sz == last and sz > 0 else 0; last = sz
             if stable >= 2:
                 return True
         time.sleep(1)
-    return os.path.exists(f)
+    return biggest() is not None
 
 
 def run_proc(job, cmd, on_line=None, timeout=3600):
@@ -394,7 +399,7 @@ FILL_RULES_LOCAL = """You are a senior UX researcher writing part of a usability
 Return ONE JSON object. Keys = EXACTLY the placeholder names listed below (all of them, none extra). Values = HTML strings (no markdown).
 Rules: cite evidence as said · eyes · time; quote the transcript verbatim (original language) with [m:ss]; eyes come from the timeline/moments
 (3x3 cells TL,TC,TR,ML,MC,MR,BL,BC,BR; states on_screen/off_left/off_right/down_keyboard/away/no_face/camera_frozen — camera_frozen = no camera frames arrived (tab hidden, app switch or recorder stall): NOT attention data, never a 'look away'; CAMERA_FROZEN moments report it; DEAD_CLICKS moments = bursts of clicks on something that did not respond); NEVER invent quotes, clicks or events;
-expression cues are cue-level, never emotions as facts. Wording tier: 'regions' = firm columns/halves; 'likely' = say 'likely'; 'unvalidated' =
+expression cues are cue-level, never emotions as facts. Wording tier: 'no_gaze' = the camera did not record: NEVER write where the eyes were, drop every eye claim, and build every finding from speech, mouse, clicks and page changes (write 'no eye data' where an eyes line would go); 'regions' = firm columns/halves; 'likely' = say 'likely'; 'unvalidated' =
 every gaze statement says 'estimated (unvalidated)' and findings lean on transcript/mouse/clicks/look-away. If evidence is thin, say so plainly.
 Formats (rows only, EXACT cell counts): GRADE_TABLE 3 cells (dimension · score /10 or "no evidence" · why/evidence); ROADMAP_ROWS 5 (Now/Next/Later · ship · why · impact · effort); ACTION_LIST_ROWS 5 (# · P0/P1/P2 · page · action · evidence said·eyes·time); PLACEMENT_TABLE 4 (when the user wants to… · eyes concentrate… · behaviour · so place it…); PER_NEED_MAP 5 (need · intent · where the eyes went · verdict · fix).
 FINDINGS_P0/FINDINGS_P1/FINDINGS_P2/DELIGHTERS = one or more blocks EXACTLY like:
@@ -648,6 +653,10 @@ def stage_fill(job):
     flags_ = RD.get("flags") or []
     no_speech = ("no_speech" in flags_ or not speech_text.strip()) and not any(f in ("transcript_missing", "whisper_failed") for f in flags_)
     dropped, blanked = verify_findings(mapping, speech_text, no_speech)
+    if tier == "no_gaze":                                               # no camera: an eyes claim would be fabricated
+        for k_, v_ in list(mapping.items()):
+            if isinstance(v_, str):
+                mapping[k_] = re.sub(r'<div class="eyes">.*?</div>', '<div class="eyes">👁 <b>Eyes:</b> no eye data in this session</div>', v_, flags=re.S)
     if tier == "regions":                                               # validated session: the model must not hedge with the weaker tiers' wording
         for k_, v_ in mapping.items():
             if isinstance(v_, str):
@@ -709,7 +718,7 @@ def worker():
             if not job.get("files_ready"):
                 logj(job, "waiting for the recording to finish saving…")
                 if not wait_for_files(job):
-                    raise RuntimeError("face.webm never appeared in " + job["folder"])
+                    raise RuntimeError("no recording (face/screen/audio.webm) appeared in " + job["folder"])
                 job["files_ready"] = True; job["video_s"] = round(video_seconds(job["folder"]), 1)
                 job["eta_s"] = int(job["video_s"] * RATE + FILL_EST_S + 20); save(job)
             i = job.get("stage_index", 0)

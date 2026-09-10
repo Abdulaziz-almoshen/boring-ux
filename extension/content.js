@@ -300,7 +300,8 @@ async function stop(){
   files["session.json"]=txt(JSON.stringify(summary(),null,2));
   if((S.captions||[]).length) files["captions.jsonl"]=txt(S.captions.map(c=>JSON.stringify(c)).join("\n"));
   files["SESSION-AI.md"]=txt(aiBundle());
-  if(S.chunks.face.length) files["face.webm"]=new Blob(S.chunks.face,{type:m});
+  const noFace=!S.chunks.face.length;
+  if(!noFace) files["face.webm"]=new Blob(S.chunks.face,{type:m});
   if(S.chunks.audio.length) files["audio.webm"]=new Blob(S.chunks.audio,{type:"audio/webm"});
   if(S.chunks.screen.length) files["screen.webm"]=new Blob(S.chunks.screen,{type:m});
   S.chunks={face:[],audio:[],screen:[]};
@@ -310,6 +311,8 @@ async function stop(){
   $("bux-cam").disabled=false; $("bux-cam").textContent="Enable camera";
   $("bux-cal-btn").disabled=true; $("bux-cam-view").disabled=true; $("bux-start").disabled=true; $("bux-stop").disabled=true; $("bux-selftest").disabled=true;
   $("bux-status").textContent="saved ✓ · idle"; $("bux-region").textContent="—";
+  /* the camera produced no video (usually: this tab was not in front while recording) — say so instead of shipping a session with no eye data */
+  if(noFace) setHint("⚠ No camera video was recorded — this session has NO eye tracking. Keep the Boring UX tab in front and test inside it; the report will use speech, mouse and clicks only.");
   // 5) HONEST result: did the files really go into one folder, or did we fall back to loose files?
   const failed=results.filter(r=>r&&!r.ok);
   if(failed.length===0){

@@ -1,33 +1,66 @@
 ---
 name: boring-ux-report
-description: Turn a Boring UX session folder (SESSION-AI.md + audio/gaze/mouse/events) into the full evidence-based UX report (HTML + PDF). Use when the user points at a session-* folder or asks to analyze a recorded usability session.
+description: Turn a Boring UX session folder (face.webm + audio + mouse/events) into the full evidence-based UX report (HTML + PDF) — the "Detailed Usability Findings & UX Recommendations" format. Use when the user points at a session folder (Downloads/boring-ux/<site>-<time>/ or session-*/) or asks to analyze a recorded usability session.
 ---
 
 # Boring UX → full UX report
 
-You are a senior UX researcher + product manager. The user has a `session-…/` folder recorded by Boring UX. Produce the complete, evidence-based UX report.
+You are a senior UX researcher + product manager. The user has a Boring UX session folder. Produce the complete,
+evidence-based report in the exact format of `~/Desktop/UX/UX-Recommendations-SehaMedical.pdf` (Parts A–E, P0/P1/Keep/P2,
+latency table, action list, intent conclusion, fused-timeline appendix). Everything mechanical is generated for you;
+you supply the judgment inside a fixed scaffold.
 
-## Steps
+## Pipeline (run in order; each step is idempotent)
 
-1. **Locate the session folder** (the user names it, or find the newest `session-*/`). Read `SESSION-AI.md` first — it contains the metadata, data-quality notes, and the unified timeline (gaze + mouse + events on one clock). The full-resolution data is in `gaze.csv`, `mouse.csv`, `events.csv`, `session.json`.
+1. **Locate the session** (user names it, else newest folder). It must contain `face.webm` (mandatory). If `face.webm`
+   starts with ASCII like `opus;base64,` run `python3 tools/recover-webm.py <folder>` first.
 
-2. **Transcribe the audio** (local, private) if no `transcript.srt` exists yet:
+2. **Video analysis** — if `<session>/analysis/gaze-ai.csv` is missing or older than `face.webm`:
    ```bash
-   ffmpeg -i audio.webm -ar 16000 -ac 1 /tmp/a.wav
-   whisper-cli -m <ggml-large-v3-turbo.bin> -f /tmp/a.wav -l auto -osrt -of transcript
+   source ~/Desktop/gaze-ai/.venv/bin/activate
+   python3 tools/bux-analyze-video.py <session> [--whisper-model ~/Desktop/gaze-ai/models/ggml-large-v3-turbo.bin]
    ```
-   (Install via `brew install whisper-cpp ffmpeg`; download the model from huggingface `ggerganov/whisper.cpp` if missing.) Collapse repeated identical lines (silence hallucinations). Translate quotes to English but keep the original.
+   Writes `analysis/{gaze-ai.csv, expressions.csv, moments.json, quality.json, frames.csv, transcript.srt?, debug/}`.
+   It aborts on a failed L2CS flip self-test — never work around that.
 
-3. **Fuse** every spoken segment with the gaze during it (same clock, t=0 = recording start): dominant region/cell, on-screen %, scanning intensity. Compute: L/C/R dwell, 3×3 heatmap, fixations (>1s = deep), silent-gap latency (pauses ≥4s + what the eyes did), per-page/per-field timing, frustration signals, gaze-vs-mouse lead/lag. Classify each segment's intent (action / seeking-data / confused) and pool gaze per intent.
+3. **Transcript** — if `analysis/transcript.srt` is missing and a whisper model exists, re-run step 2 with `--whisper-model`.
+   If no model is available, proceed and state "no transcript" in Method & confidence (speech evidence unavailable).
+   Never invent quotes.
 
-4. **Write ONE self-contained HTML report** (inline CSS, print-ready) with exactly these sections: title+product · overall grade /10 with sub-scores + verdict · executive summary (P0/P1/Keep) · method & confidence (state `gazeAccuracyPx` from session.json; flag uncalibrated data as directional; flag missing events.csv) · journey map (stage·time·emotion·gaze·opportunity) · attention analytics as inline SVG (gaze ribbon orange=L blue=C green=R grey=away + engagement + searching lines) · feature scorecard (gaze L/C/R, on-screen %, search/min, signal, friction 0–100, recommendation) · findings P0→P1→Keep→P2 each with quote + eyes-at-that-moment + timing · latency table · RICE backlog (ticket-ready) · intent heatmaps conclusion ("where to place actions, data, filters") · appendix: every fused segment verbatim with gaze + latency gap.
+4. **Scaffold** — `python3 tools/bux-report.py <session> --product "<Product name>"` →
+   `analysis/report-scaffold.html` (design tokens, method & confidence, attention SVG, pre-filled scorecard/latency/moments/
+   intent tables, complete appendix) and `analysis/report-data.json` (all computed stats + `placeholders`).
 
-   Design tokens: text `#1a2233`, muted `#6b7488`, borders `#e6eaf2`, P0 `#d33`, P1 `#e8871e`, accent `#4f8cff`, delight `#0a9d54`; original-language quotes in a green-left-border box (`direction:rtl` for Arabic), English italic beneath; table headers `#f0f3f9`.
+5. **Fill the placeholders** in `report-scaffold.html` and save as `<session>/report.html`. Read `report-data.json`,
+   `gaze-ai.csv` (per-second: gaze cell/state/conf, mouse cell, clicks, speech, expression z-scores, quality grade),
+   `moments.json`, and the transcript. Do NOT alter generated tables, the SVG, or appendix rows — only fill `{{…}}`
+   and the empty judgment cells. Placeholders:
+   - `GRADE_TABLE` — rows for: AI & intelligence · Visual design · Data clarity · Delight · Task efficiency · Actionability ·
+     Discoverability, each `<tr><td>dim</td><td>x.x</td><td>evidence</td></tr>`.
+   - `JOURNEY_SUMMARY`, `SIGNAL`/`FRICTION`/`RECOMMENDATION` per scorecard row (Signal ∈ Delight/Friction/Confusion/Request;
+     Friction 0–100), `PRODUCT_INSIGHTS`, `ROADMAP_ROWS`, `INSTRUMENT_NEXT`.
+   - `FINDINGS_P0`, `FINDINGS_P1`, `DELIGHTERS`, `FINDINGS_P2` — use the finding-block template embedded as an HTML comment:
+     `.finding` > `h3` with `<span class="p0|p1|p2|keep">`, `Page/Task` line, `<span class="ar">` original quote (RTL box; use it
+     for any language, English too), `<div class="en">[m:ss] translation</div>`, `<div class="eyes">👁 Eyes: … ⏱ …</div>`,
+     `<div class="rec">Fix: …</div>`. Every finding cites the triple **said · eyes · time**; eyes come from `gaze-ai.csv`
+     cells/states and `moments.json` dwell maps.
+   - `LATENCY_MEANING` per latency row, `ACTION_LIST_ROWS` (# · Pri · Page · Action · Evidence), `INTENT_READS_AS`,
+     `PLACEMENT_TABLE`, `PER_NEED_MAP`, `APPENDIX_ENGLISH` (translate each Arabic appendix row; leave English rows).
 
-5. **Save** `report.html` in the session folder and render a PDF:
-   ```bash
-   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless --disable-gpu \
-     --no-pdf-header-footer --print-to-pdf=report.pdf report.html
-   ```
+6. **Wording tier (mandatory)** — from `quality.json.click_consistency.tier`, echoed in the scaffold header:
+   - `regions`: columns/halves firmly; 3×3 cells with "probably".
+   - `likely`: columns with "likely"; no specific-cell claims.
+   - `unvalidated` (also when `signs.orientation == INVERTED`): every gaze statement reads "estimated (unvalidated)";
+     build findings on mouse, clicks, transcript, and LOOK-AWAY/keyboard events; grades capped at C for gaze-based claims.
+   Expression cues are cue-level only ("brow lowering rose to z = 2.1"), never "the user felt X".
 
-Be honest throughout: n=1 unless more sessions; webcam gaze is directional within the measured accuracy radius; never invent quotes or events not present in the data.
+7. **PDF** — `"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless --disable-gpu --no-pdf-header-footer --print-to-pdf=<session>/report.pdf <session>/report.html`
+
+8. **QA before returning**: no `{{` left in `report.html`; every finding has quote + eyes + time; Method & confidence shows
+   usable-%, click-consistency, tier, flags; the footer disclaimer is present; n = 1 stated unless sessions were combined.
+
+## Answering "was the user looking for X at <region>?"
+Use the SEARCHING/FOUND-THEN-ACTED moments' `gaze_dwell` for the window before the relevant click, compare with the
+session baseline dwell for that cell/column (report-data `stats.gaze_cells`), and report per the design's template
+(likelihood ratio + column/cell + confidence), e.g. "During the 7 s before clicking *Submit*, 61 % of confident gaze was in
+the right column (session baseline 38 %) — likely searching on the right; top-right unconfirmed." See docs/GAZE-FROM-VIDEO-DESIGN.md §6.

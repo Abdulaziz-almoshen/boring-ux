@@ -143,7 +143,8 @@ function isClickable(el){ let n=el,d=0; while(n&&n.nodeType===1&&d<6){ if(/^(A|B
 function ev(o){ if(S.recording){ o.t=Math.round(nowRel()); S.events.push(o); } }
 
 document.addEventListener("click",e=>{ if(!S.recording)return; const el=e.target||{}; const clickable=isClickable(el);
-  ev({type:"click",x:e.clientX,y:e.clientY,tag:el.tagName||"",txt:(el.innerText||el.value||"").toString().trim().slice(0,60),clickable,gazeRegion:S.lastRegion||"?"});
+  let rect=null; try{ const b=(el.getBoundingClientRect?el:el.parentElement).getBoundingClientRect(); rect=[Math.round(b.left),Math.round(b.top),Math.round(b.width),Math.round(b.height)]; }catch(_){}
+  ev({type:"click",x:e.clientX,y:e.clientY,tag:el.tagName||"",txt:(el.innerText||el.value||"").toString().trim().slice(0,60),clickable,rect,gazeRegion:S.lastRegion||"?"});
   try{ if(window.webgazer) webgazer.recordScreenPosition(e.clientX,e.clientY,"click"); }catch(_){}
   const now=performance.now(); S.recentClicks.push({x:e.clientX,y:e.clientY,t:now});
   S.recentClicks=S.recentClicks.filter(c=>now-c.t<1200);
@@ -214,7 +215,8 @@ async function stop(){
   const results=[];
   results.push(await dl(folder+"/gaze.csv", csv(["t_ms","x","y","h_region","cell"], S.gaze.map(g=>[g.t,g.x,g.y,g.col,g.cell]))));
   results.push(await dl(folder+"/mouse.csv", csv(["t_ms","x","y"], S.mouse.map(g=>[g.t,g.x,g.y]))));
-  results.push(await dl(folder+"/events.csv", csv(["t_ms","type","detail","gazeRegion","extra"], S.events.map(e=>[e.t,e.type,e.txt||e.title||e.note||"",e.gazeRegion||"",e.url||e.pct||""]))));
+  results.push(await dl(folder+"/events.csv", csv(["t_ms","type","detail","gazeRegion","extra","x","y","clickable","rect"],
+    S.events.map(e=>[e.t,e.type,e.txt||e.title||e.note||"",e.gazeRegion||"",e.url||e.pct||"",e.x??"",e.y??"",e.clickable===undefined?"":(e.clickable?1:0),e.rect?e.rect.join(" "):""]))));
   results.push(await dl(folder+"/session.json", JSON.stringify(summary(),null,2)));
   results.push(await dl(folder+"/SESSION-AI.md", aiBundle()));
   if(S.chunks.face.length) results.push(await dlBlob(folder+"/face.webm", new Blob(S.chunks.face,{type:m})));
@@ -242,6 +244,8 @@ function summary(){ const g=S.regionTime, gt=g.L+g.C+g.R||1;
   return { tool:"Boring UX extension", site:location.href, startedAt:new Date(S.startWall).toISOString(),
     durationSec:+(nowRel()/1000).toFixed(2), calibrated:S.calibrated, gazeAccuracyPx:S.accuracyPx,
     viewport:{stageW:innerWidth,stageH:innerHeight,winW:innerWidth,winH:innerHeight},
+    screen:{width:screen.width,height:screen.height,availHeight:screen.availHeight}, dpr:devicePixelRatio,
+    window:{screenX,screenY,outerWidth,outerHeight,innerWidth,innerHeight},
     totals:{pages:S.pages.length,gazeSamples:S.gaze.length,mouseSamples:S.mouse.length,clicks:S.events.filter(e=>e.type==="click").length},
     gazeDistribution:{left:+(g.L/gt*100).toFixed(1),center:+(g.C/gt*100).toFixed(1),right:+(g.R/gt*100).toFixed(1)},
     events:S.events }; }

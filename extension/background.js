@@ -55,6 +55,16 @@ chrome.action.onClicked.addListener(async (tab) => {
 // Save a file into a real subfolder of Downloads (chrome.downloads honors subdirectories;
 // the <a download> path attribute does not — it flattens "/" to "_").
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  // Proxy to the local processing service (127.0.0.1:7331). Runs here so the tested page's CSP can't block it.
+  if (msg && msg.bux === "daemon") {
+    fetch("http://127.0.0.1:7331" + msg.path, {
+      method: msg.method || "GET",
+      headers: { "Content-Type": "application/json" },
+      body: msg.body ? JSON.stringify(msg.body) : undefined
+    }).then(async r => sendResponse({ ok: r.ok, status: r.status, json: await r.json().catch(() => null) }))
+      .catch(e => sendResponse({ ok: false, status: 0, err: String(e && e.message || e) }));
+    return true;
+  }
   if (msg && msg.bux === "download") {
     try {
       chrome.downloads.download(

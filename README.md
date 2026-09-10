@@ -14,6 +14,10 @@ Record a session, watch exactly where people looked, and turn it into a UX repor
 
 ---
 
+## 🚀 Set up in one message (Claude Code)
+
+Most people install Boring UX by pasting one prompt into **Claude Code** — it installs the models, the analysis pipeline and the local processing service, then walks you through loading the extension. After that there is **nothing to run**: record → **Stop** → the report opens by itself. The prompt is in **[ONBOARDING.md](ONBOARDING.md)**.
+
 ## For product managers & designers
 
 You shipped a new flow. Does it actually **work** — not "did QA pass," but does a real human's **eyes** land where you intended, or do they hunt, hesitate, and rage-click? Analytics tell you *what* people clicked. They never tell you **where attention went, what confused them, or why they gave up.** Boring UX does — in an afternoon, for free.

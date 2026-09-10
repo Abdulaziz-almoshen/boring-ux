@@ -74,7 +74,8 @@ def run(args):
     # 3–4 models + extraction
     face = FaceModel(); gaze = GazeModel(device=args.device, fp16=not args.no_fp16)
     log(f"models ready (L2CS on {gaze.dev}, fp16={gaze.fp16})")
-    rows, crops, gaps = F.extract_frames(video, face, gaze, mp_hz=args.mp_fps, gaze_hz=args.fps, limit_s=args.limit_s, log=log)
+    rows, crops, gaps, plan = F.extract_frames(video, face, gaze, mp_hz=args.mp_fps, gaze_hz=args.fps, limit_s=args.limit_s, log=log)
+    flags += plan.get("flags", [])
     if not rows:
         sys.exit("no frames decoded")
     img_w = next((r["img_w"] for r in rows if r.get("face")), 640); img_h = next((r["img_h"] for r in rows if r.get("face")), 480)
@@ -166,7 +167,7 @@ def run(args):
     F.write_csv(os.path.join(out_dir, "expressions.csv"), expr, ecols)
     json.dump(dict(session=os.path.basename(session), moments=moments), open(os.path.join(out_dir, "moments.json"), "w"), ensure_ascii=False, indent=1)
     quality = dict(version=VERSION, session=os.path.basename(session), duration_s=round(dur_s, 1), display=disp, viewport=dict(w=vp.inner_w, h=vp.inner_h),
-                   f_px=round(f_px, 1), ear_blink_threshold=round(ear_thr, 3), frames=dict(mediapipe=len(rows), l2cs=len(crops), face_present_frac=round(float(np.mean([r.get("face", 0) for r in rows])), 3), pts_gaps_over_200ms=len(gaps)),
+                   f_px=round(f_px, 1), ear_blink_threshold=round(ear_thr, 3), frames=dict(mediapipe=len(rows), l2cs=len(crops), face_present_frac=round(float(np.mean([r.get("face", 0) for r in rows])), 3), pts_gaps_over_200ms=len(gaps), timing=plan),
                    signs=signs, calibration=calib, click_consistency=cc, grade_histogram=grades, gaze_usable_frac=round(usable, 3),
                    moments=dict((t, sum(1 for m in moments if m["type"] == t)) for t in ("SEARCHING", "FOUND_THEN_ACTED", "MISS_THEN_CORRECT", "LOOK_AWAY", "CONFUSION", "FRUSTRATION")),
                    flags=sorted(set(flags)), params=vars(args),

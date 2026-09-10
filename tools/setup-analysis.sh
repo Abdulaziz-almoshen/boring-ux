@@ -5,6 +5,9 @@
 # Everything goes to $BUX_AI_DIR (default ~/Desktop/gaze-ai). Re-runnable; skips what exists.
 set -euo pipefail
 DIR="${BUX_AI_DIR:-$HOME/Desktop/gaze-ai}"
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+WITH_WHISPER=0; WITH_DAEMON=0
+for a in "$@"; do case "$a" in --with-whisper) WITH_WHISPER=1;; --with-daemon) WITH_DAEMON=1;; --all) WITH_WHISPER=1; WITH_DAEMON=1;; esac; done
 mkdir -p "$DIR/models"; cd "$DIR"
 echo "▶ Boring UX analysis env → $DIR"
 
@@ -27,7 +30,7 @@ echo "▶ Models"
    "https://huggingface.co/tianfxc/l2cs/resolve/main/L2CSNet_gaze360.pkl"                      # 96 MB, Gaze360 ResNet50 (official weights, HF mirror)
 [ -s models/face_landmarker.task ] || curl -L --progress-bar -o models/face_landmarker.task \
    "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task"   # 3.8 MB
-if [ "${1:-}" = "--with-whisper" ]; then
+if [ "$WITH_WHISPER" = 1 ]; then
   [ -s models/ggml-large-v3-turbo.bin ] || curl -L -C - --progress-bar -o models/ggml-large-v3-turbo.bin \
      "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin"      # 1.6 GB
 fi
@@ -42,5 +45,14 @@ import torch, mediapipe, av, cv2, numpy
 from l2cs import getArch
 print(f"  torch {torch.__version__} (MPS={torch.backends.mps.is_available()}) · mediapipe {mediapipe.__version__} · opencv {cv2.__version__} · numpy {numpy.__version__} · av {av.__version__} · l2cs OK")
 EOF
-echo "✓ Ready. Analyze a session:"
-echo "    source $DIR/.venv/bin/activate && python3 tools/bux-analyze-video.py ~/Downloads/boring-ux/<site>-<time>"
+if [ "$WITH_DAEMON" = 1 ]; then
+  echo "▶ Local processing service (launch agent, starts at login)"
+  bash "$REPO/tools/install-daemon.sh"
+  command -v claude >/dev/null 2>&1 || echo "  ⚠ 'claude' CLI not found — reports will contain the data scaffold without written findings until Claude Code is installed"
+fi
+echo "✓ Ready."
+if [ "$WITH_DAEMON" = 1 ]; then
+  echo "    Record with the extension → Stop & save → the report opens automatically (service on 127.0.0.1:7331)."
+else
+  echo "    Analyze a session: source $DIR/.venv/bin/activate && python3 tools/bux-analyze-video.py ~/Downloads/boring-ux/<site>-<time>"
+fi

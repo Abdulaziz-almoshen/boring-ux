@@ -78,7 +78,10 @@ def parse_srt(p):
     if not os.path.exists(p):
         return []
     segs = []
-    for blk in re.split(r"\n\s*\n", open(p, encoding="utf-8").read().strip()):
+    blocks = re.split(r"\n\s*\n", open(p, encoding="utf-8").read().strip())
+    _norm = lambda t: re.sub(r"[^\w\s]", "", t).strip().lower()
+    freq = Counter(_norm(" ".join(b.strip().splitlines()[2:])) for b in blocks if len(b.strip().splitlines()) > 2)
+    for blk in blocks:
         L = blk.strip().splitlines()
         if len(L) < 2:
             continue
@@ -89,16 +92,16 @@ def parse_srt(p):
         g = list(map(int, m.groups()))
         a = g[0] * 3600 + g[1] * 60 + g[2] + g[3] / 1000; b = g[4] * 3600 + g[5] * 60 + g[6] + g[7] / 1000
         text = " ".join(L[(2 if "-->" in L[1] else 1):]).strip()
-        norm = re.sub(r"[^\w\s]", "", text).strip().lower()
-        if norm in HALLUCINATIONS or ((b - a) >= 20 and len(norm.split()) <= 3):
-            continue                                   # whisper hallucination on silence
+        norm = _norm(text)
+        if norm in HALLUCINATIONS or ((b - a) >= 20 and len(norm.split()) <= 3) or freq[norm] > 10:
+            continue                                   # whisper hallucination on silence (stock phrase / repeated loop)
         if text and not (segs and segs[-1]["text"] == text):
             segs.append(dict(start=a, end=b, text=text))
     return segs
 
 
 HALLUCINATIONS = {"thank you", "thanks for watching", "thank you for watching", "subtitles by the amaraorg community", "please subscribe",
-                  "you", "bye", "so", "شكرا", "شكرا لكم", "ترجمة نانسي قنقر", "اشترك في القناة"}
+                  "you", "bye", "so", "شكرا", "شكرا لكم", "ترجمة نانسي قنقر", "اشترك في القناة", "اشتركوا في القناة", "لا تنسوا الاشتراك في القناة"}
 
 
 def is_arabic(s):
@@ -277,8 +280,8 @@ def render(D, rows, M, Q, product, appendix, segs):
     o.append("<p class='sub'>Ribbon = gaze column per second (orange L, blue C, green R, grey away/unknown). Blue line = on-screen engagement. Orange line = searching intensity. Bottom bar = detected moments (orange searching, red confusion, dark-red frustration, green found→acted, grey look-away).</p>")
     # Part C scorecard
     o.append("<h2>Part C · Feature-by-feature scorecard</h2><table><tr><th>Feature / phase</th><th>Time</th><th>Gaze L/C/R</th><th>On-screen</th><th>Search/min</th><th>Clicks</th><th>Signal</th><th>Friction</th><th>Recommendation</th></tr>")
-    for p in D["phases"]:
-        o.append(f"<tr><td>{esc(p['name'])}</td><td>{esc(p['time'])}</td><td>{lcr_bar(p['l'], p['c'], p['r'])}</td><td>{p['on']:.0f}%</td><td>{p['spm']:.0f}</td><td>{p['clicks']}</td><td>{{{{SIGNAL}}}}</td><td>{{{{FRICTION}}}}</td><td>{{{{RECOMMENDATION}}}}</td></tr>")
+    for i, p in enumerate(D["phases"], 1):
+        o.append(f"<tr><td>{esc(p['name'])}</td><td>{esc(p['time'])}</td><td>{lcr_bar(p['l'], p['c'], p['r'])}</td><td>{p['on']:.0f}%</td><td>{p['spm']:.0f}</td><td>{p['clicks']}</td><td>{{{{SIGNAL_{i}}}}}</td><td>{{{{FRICTION_{i}}}}}</td><td>{{{{RECOMMENDATION_{i}}}}}</td></tr>")
     o.append("</table><!-- SCORECARD_JUDGMENT: fill Signal (Delight/Friction/Confusion/Request), Friction 0–100, Recommendation per row -->")
     # Part D
     o.append("<h2>Part D · What this means for the product</h2><h3>Feature attention × friction matrix</h3>{{PRODUCT_INSIGHTS}}"
@@ -290,8 +293,8 @@ def render(D, rows, M, Q, product, appendix, segs):
              "<h2>🔴 Critical issues (P0)</h2>{{FINDINGS_P0}}")
     # latency
     o.append("<h2>⏱ Latency, hesitation &amp; timing</h2><table><tr><th>Signal</th><th>Measurement</th><th>What the eyes were doing</th><th>Meaning</th></tr>")
-    for l in D["latency"][:20]:
-        o.append(f"<tr><td>{'silence' if 'gap' in l and not l['eyes'].startswith(('searching','confusion','look')) else 'moment'} at {mmss(l['t'])}</td><td>{l['gap']:.1f} s</td><td>{esc(l['eyes'])}{(' · then: “'+esc(l['next'])+'”') if l.get('next') else ''}</td><td>{{{{LATENCY_MEANING}}}}</td></tr>")
+    for i, l in enumerate(D["latency"][:20], 1):
+        o.append(f"<tr><td>{'silence' if 'gap' in l and not l['eyes'].startswith(('searching','confusion','look')) else 'moment'} at {mmss(l['t'])}</td><td>{l['gap']:.1f} s</td><td>{esc(l['eyes'])}{(' · then: “'+esc(l['next'])+'”') if l.get('next') else ''}</td><td>{{{{LATENCY_MEANING_{i}}}}}</td></tr>")
     o.append("</table>")
     # moments
     o.append("<h2>Detected moments (from the fused signal)</h2><table><tr><th>Time</th><th>Moment</th><th>Score</th><th>Quality</th><th>Eyes (dwell)</th><th>Mouse</th><th>Clicks</th><th>Said</th></tr>")
@@ -304,15 +307,15 @@ def render(D, rows, M, Q, product, appendix, segs):
     o.append("<h2>Prioritised action list</h2><table><tr><th>#</th><th>Pri</th><th>Page</th><th>Action</th><th>Evidence (said · eyes · time)</th></tr>{{ACTION_LIST_ROWS}}</table>")
     # conclusion
     o.append("<h2>Conclusion · Where the eyes go, by intent</h2><h3>Behaviour by intent (the robust signal)</h3><table><tr><th>Intent</th><th>Episodes</th><th>Total time</th><th>Dominant cell</th><th>Column</th><th>Reads as</th></tr>")
-    for i in D["intent"]:
-        o.append(f"<tr><td>{esc(i['intent'])}</td><td>{i['n']}</td><td>{i['secs']:.0f} s</td><td>{esc(i['cell'])}</td><td>{esc(i['col'])}</td><td>{{{{INTENT_READS_AS}}}}</td></tr>")
+    for k, it in enumerate(D["intent"], 1):
+        o.append(f"<tr><td>{esc(it['intent'])}</td><td>{it['n']}</td><td>{it['secs']:.0f} s</td><td>{esc(it['cell'])}</td><td>{esc(it['col'])}</td><td>{{{{INTENT_READS_AS_{k}}}}}</td></tr>")
     o.append("</table><h3>Where to place actions, data &amp; filters</h3><table><tr><th>When the user wants to…</th><th>Their eyes concentrate…</th><th>Behaviour</th><th>So place it…</th></tr>{{PLACEMENT_TABLE}}</table>"
              "<h3>Per-need map — where they looked for each thing</h3><table><tr><th>Need</th><th>Intent</th><th>Where the eyes went</th><th>Verdict</th><th>Fix</th></tr>{{PER_NEED_MAP}}</table>")
     # appendix
     o.append(f"<h2>Appendix — complete fused timeline ({'every transcript segment' if segs else 'every 5 s — no transcript'})</h2><table><tr><th>#</th><th>Time</th><th>Gap</th><th>Speech (verbatim)</th><th>English</th><th>Eyes</th><th>On</th><th>Mouse</th></tr>")
     for a in appendix:
         sp = f"<span class='ar'>{esc(a['speech'])}</span>" if a["ar"] else esc(a["speech"])
-        en = "{{APPENDIX_ENGLISH}}" if a["ar"] else ""
+        en = f"{{{{APPENDIX_ENGLISH_{a['n']}}}}}" if a["ar"] else ""
         mouse = a["mouse"][0][0] if a.get("mouse") else "—"
         extra = (" · " + esc(a["clicks"])) if a.get("clicks") else ""
         o.append(f"<tr><td>{a['n']}</td><td>{a['time']}</td><td>{a['gap']}</td><td>{sp}{extra}</td><td>{en}</td><td>{esc(a['eyes'])}</td><td>{a['on']}</td><td>{esc(mouse)}</td></tr>")

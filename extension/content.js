@@ -24,6 +24,16 @@ css.textContent = `
 #bux-panel button.go{background:#37d67a;border-color:#37d67a;color:#04210f;font-weight:700}
 #bux-panel button.stop{background:#ff5470;border-color:#ff5470;color:#fff;font-weight:700}
 #bux-panel .row{display:flex;justify-content:space-between;margin:4px 0}
+#bux-proc{display:none;margin-top:6px}
+#bux-proc .stage{font-size:12.5px;font-weight:600;color:#e7ecf3;margin:2px 0}
+#bux-proc .bar{height:8px;border-radius:999px;background:#232a38;overflow:hidden;margin:6px 0}
+#bux-proc .fill{height:100%;width:0;border-radius:999px;background:linear-gradient(90deg,#4f8cff,#8b5cf6,#22d3ee,#4f8cff);background-size:300% 100%;animation:bux-sh 2.4s linear infinite;transition:width .6s ease}
+@keyframes bux-sh{0%{background-position:0 0}100%{background-position:300% 0}}
+#bux-proc .eta{font-size:11px;color:#8a94a6;min-height:14px}
+#bux-proc .ctl{display:flex;gap:6px;margin-top:6px}
+#bux-proc .ctl button{width:auto;flex:1;padding:6px;font-size:12px;margin:0}
+#bux-proc .ctl button.done{background:#37d67a;border-color:#37d67a;color:#04210f;font-weight:700}
+#bux-proc .log{font-size:10.5px;color:#6b7488;margin-top:4px;max-height:42px;overflow:hidden;line-height:1.3}
 #bux-dot{position:fixed;width:26px;height:26px;margin:-13px 0 0 -13px;border-radius:50%;border:3px solid #4f8cff;
  background:rgba(79,140,255,.25);box-shadow:0 0 18px rgba(79,140,255,.6);z-index:2147483646;pointer-events:none;display:none}
 #bux-cal{position:fixed;inset:0;background:rgba(6,8,12,.94);z-index:2147483647;display:none}
@@ -47,7 +57,14 @@ panel.innerHTML = `<h4>😴 Boring UX <small>any-site</small></h4>
  <button class="stop" id="bux-stop" disabled>■ Stop &amp; save</button>
  <div class="row"><span>Region</span><b id="bux-region">—</b></div>
  <div class="row"><span>Gaze</span><b id="bux-status">idle</b></div>
- <div style="font-size:11px;color:#8a94a6;margin-top:6px" id="bux-hint">Enable camera → Calibrate → Start. Stay on this tab while recording.</div>`;
+ <div style="font-size:11px;color:#8a94a6;margin-top:6px" id="bux-hint">Enable camera → Calibrate → Start. Stay on this tab while recording.</div>
+ <div id="bux-proc">
+   <div class="stage" id="bux-proc-stage">Processing…</div>
+   <div class="bar"><div class="fill" id="bux-proc-fill"></div></div>
+   <div class="eta" id="bux-proc-eta"></div>
+   <div class="ctl"><button id="bux-proc-pause">⏸ Pause</button><button id="bux-proc-open" disabled>Open report</button></div>
+   <div class="log" id="bux-proc-log"></div>
+ </div>`;
 document.documentElement.appendChild(panel);
 const dot = document.createElement("div"); dot.id="bux-dot"; document.documentElement.appendChild(dot);
 const cal = document.createElement("div"); cal.id="bux-cal"; cal.innerHTML='<div class="msg"></div>'; document.documentElement.appendChild(cal);
@@ -255,13 +272,54 @@ async function stop(){
   // 5) HONEST result: did the files really go into one folder, or did we fall back to loose files?
   const failed=results.filter(r=>r&&!r.ok);
   if(failed.length===0){
-    setHint("✅ Saved as ONE folder → Downloads/"+folder+"/ ("+S.gaze.length+" gaze, "+S.events.length+" events). Camera off. Enable camera for a new session.");
+    setHint("✅ Saved as ONE folder → Downloads/"+folder+"/ ("+S.gaze.length+" gaze, "+S.events.length+" events). Camera off.");
+    startProcessing(folder);   // hand the session to the local processing service → panel becomes the processing view
   }else{
     const reason=failed[0].err||"unknown";
     const needsReload=/receiving end|establish connection|no response/i.test(reason);
     setHint("⚠ Saved as LOOSE files (couldn't make a folder). "+(needsReload?"Fix: reload the extension at chrome://extensions, then run again.":"Reason: "+reason)+" Camera off.");
   }
 }
+/* ---------- processing view — the local service (127.0.0.1:7331) owns the job; this panel is just a view of it ---------- */
+const daemon=(method,path,body)=>new Promise(res=>{ try{ chrome.runtime.sendMessage({bux:"daemon",method,path,body},r=>res(r||{ok:false,err:(chrome.runtime.lastError&&chrome.runtime.lastError.message)||"no response"})); }catch(e){ res({ok:false,err:String(e)}); } });
+const fmtEta=s=>s==null?"":s<60?`about ${Math.max(5,Math.round(s/5)*5)} s left`:`about ${Math.ceil(s/60)} min left`;
+const PANEL_BTNS=["bux-cam","bux-cam-view","bux-cal-btn","bux-start","bux-selftest","bux-stop"];
+let procTimer=null;
+function showProc(job){
+  $("bux-proc").style.display="block"; PANEL_BTNS.forEach(id=>$(id).style.display="none");
+  const pct=Math.round((job.progress||0)*100), fill=$("bux-proc-fill");
+  fill.style.width=(job.status==="done"?100:pct)+"%";
+  const labels={queued:"Queued…",running:job.stage_label||"Processing…",paused:"Paused",done:"Report ready ✓",error:"Something went wrong",cancelled:"Cancelled"};
+  $("bux-proc-stage").textContent=(labels[job.status]||job.status)+(job.status==="running"?` · ${pct}%`:"");
+  const rel=(job.folder||"").split("/Downloads/")[1]||job.folder||"";
+  $("bux-proc-eta").textContent=job.status==="running"||job.status==="queued"?fmtEta(job.eta_s):job.status==="done"?"Opened automatically · Downloads/"+rel:job.status==="error"?(job.error||"see the service log"):job.status==="paused"?"Paused — resume when you're ready":"";
+  $("bux-proc-log").textContent=(job.warnings||[]).concat((job.log||[]).slice(-2)).join(" · ");
+  const pb=$("bux-proc-pause"), st=job.status;
+  pb.textContent=st==="paused"?"▶ Resume":(st==="running"||st==="queued")?"⏸ Pause":(st==="error"||st==="cancelled")?"↻ Retry":"New session";
+  pb.onclick=async()=>{ if(st==="paused")await daemon("POST",`/jobs/${job.id}/resume`); else if(st==="running"||st==="queued")await daemon("POST",`/jobs/${job.id}/pause`); else if(st==="error"||st==="cancelled")await daemon("POST",`/jobs/${job.id}/retry`); else return endProc(); pollJob(job.id); };
+  const ob=$("bux-proc-open"); ob.disabled=st!=="done"; ob.className=st==="done"?"done":""; ob.onclick=()=>daemon("POST",`/jobs/${job.id}/open`);
+  if(st==="done"){ fill.style.animation="none"; fill.style.background="#37d67a"; } else { fill.style.animation=""; fill.style.background=""; }
+  if(st==="done"||st==="error"||st==="cancelled"){ clearInterval(procTimer); procTimer=null; }
+}
+function endProc(){ try{ chrome.storage.local.remove("buxJob"); }catch(_){} clearInterval(procTimer); procTimer=null; $("bux-proc").style.display="none"; PANEL_BTNS.forEach(id=>$(id).style.display=""); setHint("Ready. Enable camera to begin."); }
+async function pollJob(id){
+  const r=await daemon("GET",`/jobs/${id}`);
+  if(!r.ok||!r.json){ $("bux-proc").style.display="block"; $("bux-proc-stage").textContent="Processing service not reachable"; $("bux-proc-eta").textContent="Start it once: bash tools/install-daemon.sh (Claude Code can do this for you)."; return; }
+  if(r.json.status==="done" && (Date.now()/1000-(r.json.updated||0))>3600){ endProc(); return; }   // stale finished job from long ago
+  showProc(r.json);
+  if(!procTimer && ["queued","running","paused"].includes(r.json.status)) procTimer=setInterval(()=>pollJob(id),2000);
+}
+async function startProcessing(folder){
+  const h=await daemon("GET","/health");
+  if(!h.ok){ setHint("Saved ✓. Automatic processing is off — the local service isn't running. Run once: bash tools/install-daemon.sh (or ask Claude Code). You can also analyze later with tools/bux-analyze-video.py."); return; }
+  const r=await daemon("POST","/jobs",{downloads_rel:folder, product:location.hostname});
+  if(!r.ok||!r.json||!r.json.id){ setHint("Saved ✓ but the processing service refused the job: "+(r.err||(r.json&&r.json.error)||r.status)); return; }
+  try{ chrome.storage.local.set({buxJob:{id:r.json.id,folder}}); }catch(_){}
+  showProc(r.json); procTimer=setInterval(()=>pollJob(r.json.id),2000);
+}
+// Re-attach to a job in progress (survives page refresh, new tabs, browser restart — the service keeps the job).
+try{ chrome.storage.local.get("buxJob",v=>{ if(v&&v.buxJob&&v.buxJob.id) pollJob(v.buxJob.id); }); }catch(_){}
+
 addEventListener("beforeunload",()=>{ if(S.recording){ try{ S.recorders.forEach(r=>r.state!=="inactive"&&r.stop()); }catch(e){} } killCamera(); });
 
 /* ---------- outputs ---------- */

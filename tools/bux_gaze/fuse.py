@@ -51,19 +51,45 @@ def prepare_video(session, out_dir):
     return fixed
 
 
-def decode_frames(path):
-    """Yield (t_ms, rgb) using container pts (t=0 = first packet of the recording)."""
+def timing_plan(path):
+    """Inspect container pts. Healthy: use pts. Duplicate-heavy (recovered/odd recorders): synthesize monotonic
+    timestamps from frame index over the container span (flag pts_synthesized). Returns dict."""
+    out = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "packet=pts_time", "-of", "csv=p=0", path],
+                         capture_output=True, text=True).stdout.split()
+    p = [float(x) for x in out if x]
+    if len(p) < 2:
+        return dict(mode="pts", n=len(p), flags=[])
+    dup = sum(1 for a, b in zip(p, p[1:]) if b <= a)
+    ratio = dup / (len(p) - 1)
+    if ratio > 0.5:
+        return dict(mode="synth", n=len(p), t0=p[0], span=p[-1] - p[0], dup_ratio=round(ratio, 3), flags=["pts_synthesized"])
+    return dict(mode="pts", n=len(p), dup_ratio=round(ratio, 3), flags=[])
+
+
+def decode_frames(path, plan=None):
+    """Yield (t_ms, rgb). t=0 = first packet of the recording. Tolerates corrupt packets."""
     import av
+    plan = plan or timing_plan(path)
     c = av.open(path); s = c.streams.video[0]; s.thread_type = "AUTO"
-    last = -1
-    for fr in c.decode(s):
-        if fr.pts is None:
+    last = -1; i = -1
+    step = (plan["span"] / max(plan["n"] - 1, 1)) if plan["mode"] == "synth" else None
+    for packet in c.demux(s):
+        try:
+            frames = packet.decode()
+        except Exception:  # noqa: BLE001 — corrupt packet: skip, keep going
             continue
-        t_ms = int(round(float(fr.pts * s.time_base) * 1000))
-        if t_ms <= last:
-            continue                                  # duplicates / backward jumps (recovered files)
-        last = t_ms
-        yield t_ms, fr.to_ndarray(format="rgb24")
+        for fr in frames:
+            i += 1
+            if plan["mode"] == "synth":
+                t_ms = int(round((plan["t0"] + i * step) * 1000))
+            else:
+                if fr.pts is None:
+                    continue
+                t_ms = int(round(float(fr.pts * s.time_base) * 1000))
+                if t_ms <= last:
+                    continue                          # duplicates / backward jumps
+            last = t_ms
+            yield t_ms, fr.to_ndarray(format="rgb24")
 
 
 # ---------------- per-frame extraction (§3) ----------------
@@ -72,7 +98,10 @@ def extract_frames(video, face, gaze, mp_hz=15, gaze_hz=10, limit_s=0, log=print
     mp_step, gz_step = 1000.0 / mp_hz, 1000.0 / gaze_hz
     next_mp = next_gz = 0.0
     t0 = time.time(); n_dec = 0; gaps = []; prev_t = None
-    for t_ms, rgb in decode_frames(video):
+    plan = timing_plan(video)
+    if plan["mode"] == "synth":
+        log(f"  timestamps: {plan['dup_ratio']:.0%} duplicate pts → synthesized from frame index over {plan['span']:.1f}s (flag pts_synthesized)")
+    for t_ms, rgb in decode_frames(video, plan):
         n_dec += 1
         if prev_t is not None and t_ms - prev_t > 200:
             gaps.append((prev_t, t_ms))
@@ -102,7 +131,7 @@ def extract_frames(video, face, gaze, mp_hz=15, gaze_hz=10, limit_s=0, log=print
         for k, ri in enumerate(crop_rows):
             rows[ri].update(h_raw=float(h[k]), v_raw=float(v[k]), sharp_h=float(sh[k]), sharp_v=float(sv[k]))
     log(f"  frames: {n_dec} decoded, {len(rows)} MediaPipe, {len(crops)} L2CS in {time.time()-t0:.0f}s; pts gaps>200ms: {len(gaps)}")
-    return rows, crops, gaps
+    return rows, crops, gaps, plan
 
 
 # ---------------- blinks (§3.1) ----------------
@@ -213,12 +242,15 @@ def parse_srt(txt):
         text = " ".join(l for l in lines[(2 if "-->" in lines[1] else 1):]).strip()
         if text:
             segs.append(dict(start=a, end=b, text=text))
-    # drop whisper hallucinations on silence: stock phrases, and long segments with ≤3 words; collapse repeats
+    # drop whisper hallucinations on silence: stock phrases, long segments with ≤3 words, and any line the model
+    # repeats >10× in one file (e.g. 291× "اشتركوا في القناة"); then collapse consecutive repeats
+    from collections import Counter as _C
+    norm = lambda t: re.sub(r"[^\w\s]", "", t).strip().lower()
+    freq = _C(norm(s["text"]) for s in segs)
     out = []
     for s in segs:
-        norm = re.sub(r"[^\w\s]", "", s["text"]).strip().lower()
-        dur = (s["end"] - s["start"]) / 1000
-        if norm in HALLUCINATIONS or (dur >= 20 and len(norm.split()) <= 3):
+        n = norm(s["text"]); dur = (s["end"] - s["start"]) / 1000
+        if n in HALLUCINATIONS or (dur >= 20 and len(n.split()) <= 3) or freq[n] > 10:
             continue
         if out and s["text"] == out[-1]["text"]:
             continue
@@ -227,7 +259,7 @@ def parse_srt(txt):
 
 
 HALLUCINATIONS = {"thank you", "thanks for watching", "thank you for watching", "subtitles by the amaraorg community", "please subscribe",
-                  "you", "bye", "so", "شكرا", "شكرا لكم", "ترجمة نانسي قنقر", "اشترك في القناة"}
+                  "you", "bye", "so", "شكرا", "شكرا لكم", "ترجمة نانسي قنقر", "اشترك في القناة", "اشتركوا في القناة", "لا تنسوا الاشتراك في القناة"}
 
 
 # ---------------- click bias + consistency (§4.6, §7.2) ----------------

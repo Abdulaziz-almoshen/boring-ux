@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# One-command setup for the offline AI analysis (macOS, Apple Silicon or Intel).
+#   bash tools/setup-analysis.sh                # env + gaze/face models (~1.1 GB incl. torch)
+#   bash tools/setup-analysis.sh --with-whisper # also the speech model (+1.6 GB) for transcripts
+# Everything goes to $BUX_AI_DIR (default ~/Desktop/gaze-ai). Re-runnable; skips what exists.
+set -euo pipefail
+DIR="${BUX_AI_DIR:-$HOME/Desktop/gaze-ai}"
+mkdir -p "$DIR/models"; cd "$DIR"
+echo "▶ Boring UX analysis env → $DIR"
+
+# Python 3.12 venv (mediapipe has no wheels for 3.13+). uv fetches 3.12 itself; otherwise python3.12 must exist.
+if [ ! -x .venv/bin/python ]; then
+  if command -v uv >/dev/null 2>&1; then uv venv --python 3.12 .venv
+  elif command -v python3.12 >/dev/null 2>&1; then python3.12 -m venv .venv
+  else echo "✗ need Python 3.12: 'brew install uv' (recommended) or 'brew install python@3.12'"; exit 1; fi
+fi
+# shellcheck disable=SC1091
+source .venv/bin/activate
+if command -v uv >/dev/null 2>&1; then PIP="uv pip install"; else PIP="pip install -q"; fi
+
+echo "▶ Python packages (pinned set that works together)"
+$PIP "torch>=2.4" "numpy>=2,<3" "scipy>=1.18" "opencv-python<5" "mediapipe==0.10.14" "av>=12" \
+     "git+https://github.com/edavalosanaya/L2CS-Net.git@main"
+
+echo "▶ Models"
+[ -s models/L2CSNet_gaze360.pkl ] || curl -L --progress-bar -o models/L2CSNet_gaze360.pkl \
+   "https://huggingface.co/tianfxc/l2cs/resolve/main/L2CSNet_gaze360.pkl"                      # 96 MB, Gaze360 ResNet50 (official weights, HF mirror)
+[ -s models/face_landmarker.task ] || curl -L --progress-bar -o models/face_landmarker.task \
+   "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task"   # 3.8 MB
+if [ "${1:-}" = "--with-whisper" ]; then
+  [ -s models/ggml-large-v3-turbo.bin ] || curl -L -C - --progress-bar -o models/ggml-large-v3-turbo.bin \
+     "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin"      # 1.6 GB
+fi
+
+echo "▶ System tools"
+for t in ffmpeg ffprobe; do command -v $t >/dev/null 2>&1 || echo "  ✗ $t missing → brew install ffmpeg"; done
+command -v whisper-cli >/dev/null 2>&1 || echo "  ✗ whisper-cli missing (needed for transcripts) → brew install whisper-cpp"
+
+echo "▶ Smoke test"
+python - <<'EOF'
+import torch, mediapipe, av, cv2, numpy
+from l2cs import getArch
+print(f"  torch {torch.__version__} (MPS={torch.backends.mps.is_available()}) · mediapipe {mediapipe.__version__} · opencv {cv2.__version__} · numpy {numpy.__version__} · av {av.__version__} · l2cs OK")
+EOF
+echo "✓ Ready. Analyze a session:"
+echo "    source $DIR/.venv/bin/activate && python3 tools/bux-analyze-video.py ~/Downloads/boring-ux/<site>-<time>"

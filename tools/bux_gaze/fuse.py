@@ -196,13 +196,21 @@ def parse_srt(txt):
         text = " ".join(l for l in lines[(2 if "-->" in lines[1] else 1):]).strip()
         if text:
             segs.append(dict(start=a, end=b, text=text))
-    # collapse whisper silence loops
+    # drop whisper hallucinations on silence: stock phrases, and long segments with ≤3 words; collapse repeats
     out = []
     for s in segs:
+        norm = re.sub(r"[^\w\s]", "", s["text"]).strip().lower()
+        dur = (s["end"] - s["start"]) / 1000
+        if norm in HALLUCINATIONS or (dur >= 20 and len(norm.split()) <= 3):
+            continue
         if out and s["text"] == out[-1]["text"]:
             continue
         out.append(s)
     return out
+
+
+HALLUCINATIONS = {"thank you", "thanks for watching", "thank you for watching", "subtitles by the amaraorg community", "please subscribe",
+                  "you", "bye", "so", "شكرا", "شكرا لكم", "ترجمة نانسي قنقر", "اشترك في القناة"}
 
 
 # ---------------- click bias + consistency (§4.6, §7.2) ----------------

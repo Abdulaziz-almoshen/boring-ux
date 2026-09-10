@@ -89,9 +89,16 @@ def parse_srt(p):
         g = list(map(int, m.groups()))
         a = g[0] * 3600 + g[1] * 60 + g[2] + g[3] / 1000; b = g[4] * 3600 + g[5] * 60 + g[6] + g[7] / 1000
         text = " ".join(L[(2 if "-->" in L[1] else 1):]).strip()
+        norm = re.sub(r"[^\w\s]", "", text).strip().lower()
+        if norm in HALLUCINATIONS or ((b - a) >= 20 and len(norm.split()) <= 3):
+            continue                                   # whisper hallucination on silence
         if text and not (segs and segs[-1]["text"] == text):
             segs.append(dict(start=a, end=b, text=text))
     return segs
+
+
+HALLUCINATIONS = {"thank you", "thanks for watching", "thank you for watching", "subtitles by the amaraorg community", "please subscribe",
+                  "you", "bye", "so", "شكرا", "شكرا لكم", "ترجمة نانسي قنقر", "اشترك في القناة"}
 
 
 def is_arabic(s):

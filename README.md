@@ -74,6 +74,25 @@ Open **`SESSION-AI.md`** from the session folder — it's **one self-contained f
 
 You get the complete report: overall grade, attention graphs, feature-by-feature scorecard, intent heatmaps ("where do users look when confused vs. acting"), findings, a RICE backlog, and a full fused transcript appendix.
 
+### 🧠 Analyze the video with AI (offline, recommended)
+The recorded `face.webm` is the primary gaze source: it's post-processed on your Mac with **L2CS-Net** (gaze direction) and **MediaPipe** (blink, head pose, expression cues), mapped to screen regions with **no calibration dots**, and fused per second with mouse, clicks and the think-aloud transcript. Design + verified conventions: [`docs/GAZE-FROM-VIDEO-DESIGN.md`](docs/GAZE-FROM-VIDEO-DESIGN.md).
+
+**One-time setup** (Python 3.12 env + models; add `--with-whisper` for transcripts, +1.6 GB):
+```bash
+brew install uv ffmpeg whisper-cpp
+bash tools/setup-analysis.sh --with-whisper
+```
+
+**Analyze a session, then build the report:**
+```bash
+source ~/Desktop/gaze-ai/.venv/bin/activate
+python3 tools/bux-analyze-video.py ~/Downloads/boring-ux/<site>-<time>     # → <session>/analysis/
+python3 tools/bux-report.py       ~/Downloads/boring-ux/<site>-<time> --product "Your product"
+```
+`analysis/` gets `gaze-ai.csv` (per-second gaze cell/state + mouse + clicks + speech + expression cues + quality grade), `moments.json` (SEARCHING, FOUND→ACTED, CONFUSION, LOOK-AWAY, FRUSTRATION with evidence), `quality.json` (sign self-tests, click-consistency, grades), `expressions.csv`, `transcript.srt`, and the report scaffold. Then run the **`boring-ux-report`** skill (Claude Code in the repo: *"analyze this session"*) to fill the findings and render `report.html` + `report.pdf`.
+
+**How long it takes** (Apple Silicon, measured): video analysis ≈ **0.3× real time** (a 10-min recording ≈ 3 min; CPU-only ≈ 10× slower), transcription ≈ 20× real time (10 min ≈ 30 s), scaffold ≈ 1 s. In the panel, run the **8-s sign self-test** once per session (LEFT/RIGHT/TOP/BOTTOM) so the analysis can prove its own orientation.
+
 ### Locked-down sites (`Permissions-Policy: camera=()`)
 A few sites disable the camera for everything in their page via a `Permissions-Policy` header — so even with camera permission granted, in-page tracking is blocked. For these, the extension applies a **local testing override**: on activation it strips that header (and `X-Frame-Options`) from the response **in your browser only**, for the domain you're testing, then reloads so the camera works.
 

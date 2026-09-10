@@ -305,11 +305,9 @@ def evidence_pack(A, max_transcript=24000):
     data["moments"] = [dict(type=m["type"], t=f"{m['t_start_ms']/1000:.0f}-{m['t_end_ms']/1000:.0f}s", score=m.get("score"), q=m.get("min_quality_grade"),
                             dwell=m.get("gaze_dwell"), said=(m.get("transcript") or "")[:120], clicks=[c.get("target_text") for c in (m.get("clicks") or [])][:3]) for m in M[:60]]
     tr = "\n".join(f"[{a['time']}] {a['speech']}" for a in (D.get("appendix") or []) if a.get("speech") and a["speech"] != "(no transcript)")
-    if not tr:
-        try:
-            tr = open(os.path.join(A, "transcript.srt"), encoding="utf-8").read()
-        except Exception:  # noqa: BLE001
-            tr = "(no transcript)"
+    if not tr:   # the raw whisper file is NOT a fallback: on silence it contains only hallucinations ("Thank you.")
+        tr = ("NO SPEECH. The participant did not talk during this session (whisper produced only silence/hallucinations, which were removed). "
+              "There are NO quotes to cite. Every statement must rest on eyes, mouse, clicks and timing; write 'no speech' where a quote would go.")
     tr = tr[:max_transcript]
     rows = []
     try:
@@ -358,11 +356,13 @@ sentence across placeholders. (6) Prefer specific observed moments (timeline lin
 
 FINDINGS_GUIDE = """
 === how to build this part ===
-FINDINGS_P0 = 1-3 blocks (IDs C1, C2…): moments where the participant could not proceed, repeated a step, or said so (MISS_THEN_CORRECT,
-FRUSTRATION, CONFUSION with speech). FINDINGS_P1 = 2-4 blocks (H1…): slowdowns and misreads. FINDINGS_P2 = 1-3 blocks (N1…): polish.
-DELIGHTERS = 1-3 blocks (D1…, class keep, label KEEP): things that clearly worked or were praised. Every block MUST start from one specific
-moment or transcript line in the evidence (its [m:ss] appears in the block); if a tier truly has no evidence, return one short
-<p>No evidence for this tier in this session.</p>. ACTION_LIST_ROWS = one <tr><td>ID</td><td>action</td><td>owner</td><td>priority</td></tr> per block above.
+FINDINGS_P0 = 0-3 blocks (IDs C1, C2…) ONLY for moments where the participant could not proceed, repeated a step, or said so.
+FINDINGS_P1 = 0-4 blocks (H1…): slowdowns and misreads. FINDINGS_P2 = 0-3 blocks (N1…): polish.
+DELIGHTERS = 0-3 blocks (D1…, class keep, label KEEP): things that clearly worked or were praised.
+Every block MUST start from one specific moment or transcript line in the evidence (its [m:ss] appears in the block). A tier with nothing
+that qualifies MUST be exactly <p>No evidence for this tier in this session.</p> — an empty tier is correct; an invented quote or a padded
+block is a failure. LOOK_AWAY / no_face moments are not findings unless they interrupt a task step. When there is no speech, the quote span
+holds the words "no speech" and the block rests on eyes/mouse/clicks. ACTION_LIST_ROWS = one <tr><td>ID</td><td>action</td><td>owner</td><td>priority</td></tr> per block.
 """
 
 
@@ -415,6 +415,44 @@ def write_with_claude(job, pf, est, t0):
 NOT_WRITTEN = ('<div class="caveat"><b>Findings not written.</b> No local language model is configured on this Mac, so this report contains '
                'the measured data (attention figure, scorecard, moments, timeline) without written findings. Install a local model '
                '(Ollama + <code>gemma3:12b</code>) and re-run, or set <code>BUX_LLM=claude</code> to opt in to Claude.</div>')
+
+
+def _norm_txt(t):
+    import html as _h
+    return re.sub(r"[^\w\u0600-\u06FF]+", "", _h.unescape(re.sub(r"<[^>]+>", "", t or ""))).lower()
+
+
+def verify_findings(mapping, speech_text, no_speech):
+    """Honesty check that does not trust the writer: drop finding blocks whose quoted text is not verbatim in the transcript,
+    blank grade rows that cite unknown quotes. Returns (dropped_blocks, blanked_rows)."""
+    corpus = _norm_txt(speech_text); dropped = blanked = 0
+    def quote_ok(q):
+        n = _norm_txt(q)
+        if not n or n in ("nospeech", "notranscript", "noquote"):
+            return True
+        return (not no_speech) and len(n) >= 4 and n in corpus
+    for key in ("FINDINGS_P0", "FINDINGS_P1", "FINDINGS_P2", "DELIGHTERS"):
+        v = mapping.get(key) or ""
+        blocks = re.findall(r'<div class="finding">.*?</div>\s*</div>', v, re.S)
+        if not blocks:
+            continue
+        keep = [b for b in blocks if all(quote_ok(q) for q in re.findall(r'<span class="ar">(.*?)</span>', b, re.S))]
+        dropped += len(blocks) - len(keep)
+        mapping[key] = "\n".join(keep) if keep else "<p>No evidence for this tier in this session.</p>"
+    rows = re.findall(r"<tr>.*?</tr>", mapping.get("GRADE_TABLE") or "", re.S); out = []
+    for r in rows:
+        cells = re.findall(r"<td>(.*?)</td>", r, re.S)
+        quotes = re.findall(r'[\"“](.{4,}?)[\"”]', re.sub(r"<[^>]+>", "", r))
+        if len(cells) >= 3 and quotes and not all(quote_ok(q) for q in quotes):
+            r = f"<tr><td>{cells[0]}</td><td>no evidence</td><td>no evidence</td></tr>"; blanked += 1
+        out.append(r)
+    if rows:
+        mapping["GRADE_TABLE"] = "\n".join(out)
+    return dropped, blanked
+
+
+THIN_EVIDENCE = ('<div class="caveat"><b>Thin evidence.</b> The participant did not speak and made no task clicks in this session, so the findings '
+                 'are limited to where attention went (estimated from the webcam) and mouse movement. Record with think-aloud for a full report.</div>')
 
 
 def stage_fill(job):
@@ -488,7 +526,19 @@ def stage_fill(job):
         mapping = _parse_mapping(res)
     if not mapping:
         job.setdefault("warnings", []).append(f"{st['model']} returned no usable JSON — report contains the data scaffold only")
+    try:
+        RD = json.load(open(os.path.join(A, "report-data.json"), encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        RD = {}
+    speech_text = " ".join(a.get("speech", "") for a in (RD.get("appendix") or []) if a.get("speech") and a["speech"] != "(no transcript)")
+    no_speech = "no_speech" in (RD.get("flags") or []) or not speech_text.strip()
+    dropped, blanked = verify_findings(mapping, speech_text, no_speech)
+    if dropped or blanked:
+        msg = f"verifier: removed {dropped} finding(s) with quotes not in the transcript, blanked {blanked} grade row(s)"
+        logj(job, msg); job.setdefault("warnings", []).append(msg)
     filled = re.sub(r"\{\{([A-Z_0-9]+)\}\}", lambda mm: str(mapping.get(mm.group(1), "")), html)
+    if no_speech and int((RD.get("stats") or {}).get("clicks") or 0) == 0:
+        filled = re.sub(r"<h2>Overall grade</h2>", THIN_EVIDENCE + "<h2>Overall grade</h2>", filled, count=1)
     filled = re.sub(r"<!--.*?-->", "", filled, flags=re.S)          # drop the scaffold's template/instruction comments
     open(os.path.join(A, "report-filled.html"), "w", encoding="utf-8").write(filled)
     job["filled_placeholders"] = len([k for k in names if mapping.get(k)]); job["placeholders_total"] = len(names)

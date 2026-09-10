@@ -23,14 +23,31 @@ HESIT_RE = re.compile(r"\b(uh+|um+|er+|hmm+)\b|امم|اه+", re.I)
 
 # ---------------- ingest (§5.1) ----------------
 def prepare_video(session, out_dir):
-    src = os.path.join(session, "face.webm")
+    """Validate/repair face.webm and remux to analysis/face_fixed.webm (design §5.1 step 1–2).
+    Handles: valid file; base64-text file (→ tell the user to run recover-webm); junk before the EBML header
+    (slice at the header); an already-repaired analysis/face_fixed.webm (kept as-is)."""
+    src = os.path.join(session, "face.webm"); fixed = os.path.join(out_dir, "face_fixed.webm")
+    if os.path.exists(fixed) and open(fixed, "rb").read(4) == EBML and os.path.getsize(fixed) > 1e6:
+        return fixed                                   # repaired earlier (manually or by a previous run)
     with open(src, "rb") as f:
-        head = f.read(4)
-    if head != EBML:
-        raise SystemExit(f"face.webm is not a WebM (starts {head.hex()}). Run tools/recover-webm.py first.")
-    fixed = os.path.join(out_dir, "face_fixed.webm")
-    if not os.path.exists(fixed) or os.path.getmtime(fixed) < os.path.getmtime(src):
-        subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", src, "-c", "copy", fixed], check=True)
+        head = f.read(8 * 1024 * 1024)
+    if head[:12].lstrip().startswith(b"opus;base64") or b";base64," in head[:200]:
+        raise SystemExit("face.webm is base64 text (pre-3e29fae recording). Run: python3 tools/recover-webm.py <session>")
+    start = 0
+    if head[:4] != EBML:
+        start = head.find(EBML)
+        if start < 0:
+            raise SystemExit(f"face.webm has no EBML header in the first 8 MB (starts {head[:4].hex()}) — unrecoverable here")
+        print(f"[bux] face.webm: {start} bytes of junk before the EBML header — slicing at offset {start}")
+        tmp = os.path.join(out_dir, "face_sliced.webm")
+        with open(src, "rb") as s, open(tmp, "wb") as d:
+            s.seek(start)
+            for chunk in iter(lambda: s.read(16 * 1024 * 1024), b""):
+                d.write(chunk)
+        src = tmp
+    subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", src, "-c", "copy", fixed], check=True, stderr=subprocess.DEVNULL)
+    if start:
+        os.remove(src)
     return fixed
 
 

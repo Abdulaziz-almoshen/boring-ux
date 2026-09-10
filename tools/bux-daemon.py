@@ -241,18 +241,22 @@ def llm_status(start=False):
     return dict(backend="none", model=None, available=True, note="no local model — " + why)
 
 
-def write_with_ollama(job, prompt, est, t0):
+def write_with_ollama(job, prompt, est, t0, out_dir=None, tag="", pbase=0.0, pspan=1.0, num_ctx=32768):
+    """One chat call to the local model. Saves the raw response (+ token counts) to analysis/fill-response-<tag>.json.
+    Progress is reported inside [pbase, pbase+pspan] of the fill stage. Returns (text, err)."""
     import urllib.request, math as _m
     body = json.dumps(dict(model=OLLAMA_MODEL, stream=False, format="json", think=False,   # think=False: Qwen3 must not emit <think> preambles
-                           options=dict(num_ctx=32768, temperature=0.2, num_predict=8192),
+                           options=dict(num_ctx=num_ctx, temperature=0.2, num_predict=8192),
                            messages=[dict(role="user", content=prompt)])).encode()
     req = urllib.request.Request(OLLAMA + "/api/chat", data=body, headers={"Content-Type": "application/json"}, method="POST")
     result = {}
     def run():
         try:
             with urllib.request.urlopen(req, timeout=3600) as r:
-                txt = json.loads(r.read()).get("message", {}).get("content", "")
-                result["out"] = re.sub(r"<think>.*?</think>", "", txt, flags=re.S).strip()   # defensive: drop any reasoning preamble
+                d = json.loads(r.read()); txt = d.get("message", {}).get("content", "")
+                result["out"] = re.sub(r"<think>.*?</think>", "", txt, flags=re.S).strip()
+                result["meta"] = dict(prompt_tokens=d.get("prompt_eval_count"), out_tokens=d.get("eval_count"), done=d.get("done_reason"),
+                                      prompt_bytes=len(prompt.encode("utf-8")), num_ctx=num_ctx, model=OLLAMA_MODEL)
         except Exception as e:  # noqa: BLE001
             result["err"] = str(e)
     th = threading.Thread(target=run, daemon=True); th.start()
@@ -260,11 +264,111 @@ def write_with_ollama(job, prompt, est, t0):
         if CTRL[job["id"]]["cancel"] or CTRL[job["id"]]["pause"]:
             return None, "interrupted"
         el = now() - t0
-        set_progress(job, 2, min(0.97, 1 - _m.exp(-el / est)), eta_s=max(10, est - el) + 20)
+        set_progress(job, 2, pbase + pspan * min(0.97, 1 - _m.exp(-el / est)), eta_s=max(10, est - el) + 20)
         th.join(2)
+    if out_dir:
+        try:
+            json.dump(dict(meta=result.get("meta"), err=result.get("err"), out=result.get("out", "")[:400000]),
+                      open(os.path.join(out_dir, f"fill-response-{tag or 'call'}.json"), "w"), ensure_ascii=False, indent=1)
+        except Exception:  # noqa: BLE001
+            pass
     if "err" in result:
         return None, result["err"]
+    if result.get("meta", {}).get("prompt_tokens") and result["meta"]["prompt_tokens"] >= num_ctx - 64:
+        logj(job, f"warning: prompt hit the context window ({result['meta']['prompt_tokens']} tokens) — answer may be truncated")
     return result.get("out", ""), None
+
+
+def _parse_mapping(text):
+    m = re.search(r"\{.*\}", text or "", re.S)
+    if not m:
+        return {}
+    try:
+        d = json.loads(m.group(0))
+        return d if isinstance(d, dict) else {}
+    except json.JSONDecodeError:
+        return {}
+
+
+def evidence_pack(A, max_transcript=24000):
+    """Compact evidence for local models: computed stats, moments, transcript, and a 10-second timeline (not 1 Hz rows)."""
+    import csv as _csv
+    from collections import Counter as _C
+    def rd(name):
+        try:
+            return json.load(open(os.path.join(A, name), encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            return {}
+    D = rd("report-data.json"); M = rd("moments.json").get("moments", [])
+    data = {k: D.get(k) for k in ("session", "site", "duration_s", "tier", "stats", "phases", "intent", "flags", "gaze_usable_frac", "grade_histogram")}
+    data["latency"] = (D.get("latency") or [])[:20]
+    data["moments"] = [dict(type=m["type"], t=f"{m['t_start_ms']/1000:.0f}-{m['t_end_ms']/1000:.0f}s", score=m.get("score"), q=m.get("min_quality_grade"),
+                            dwell=m.get("gaze_dwell"), said=(m.get("transcript") or "")[:120], clicks=[c.get("target_text") for c in (m.get("clicks") or [])][:3]) for m in M[:60]]
+    tr = "\n".join(f"[{a['time']}] {a['speech']}" for a in (D.get("appendix") or []) if a.get("speech") and a["speech"] != "(no transcript)")
+    if not tr:
+        try:
+            tr = open(os.path.join(A, "transcript.srt"), encoding="utf-8").read()
+        except Exception:  # noqa: BLE001
+            tr = "(no transcript)"
+    tr = tr[:max_transcript]
+    rows = []
+    try:
+        rows = list(_csv.DictReader(open(os.path.join(A, "gaze-ai.csv"), encoding="utf-8")))
+    except Exception:  # noqa: BLE001
+        pass
+    lines = []
+    for b in range(0, len(rows), 10):
+        w = rows[b:b + 10]
+        cells = _C(r["gaze_cell"] for r in w if r.get("gaze_cell") and r["gaze_cell"] not in ("", "uncertain"))
+        states = _C(r["gaze_state"] for r in w if r.get("gaze_state"))
+        on = sum(1 for r in w if r.get("gaze_state") == "on_screen")
+        sw = sum(int(float(r.get("region_switches") or 0)) for r in w)
+        mouse = _C(r["mouse_cell"] for r in w if r.get("mouse_cell"))
+        clicks = [c.get("target_text") or "click" for r in w for c in json.loads(r.get("clicks") or "[]")]
+        said = " ".join(dict.fromkeys(r["speech_text"] for r in w if r.get("speech_text")))[:90]
+        expr = _C(r["expr_label"] for r in w if r.get("expr_label") and r["expr_label"] != "neutral")
+        q = _C(r["quality_grade"] for r in w if r.get("quality_grade"))
+        t = int(float(w[0]["t_s"]))
+        lines.append(f"{t//60:02d}:{t%60:02d} eyes={cells.most_common(1)[0][0] if cells else (states.most_common(1)[0][0] if states else '-')} on={on}/{len(w)} sw={sw}"
+                     f" mouse={mouse.most_common(1)[0][0] if mouse else '-'}{' clicks='+'|'.join(clicks[:3]) if clicks else ''}{' expr='+expr.most_common(1)[0][0] if expr else ''} q={q.most_common(1)[0][0] if q else '-'}{' said: '+said if said else ''}")
+    timeline = "\n".join(lines)
+    return f"=== computed data (JSON) ===\n{json.dumps(data, ensure_ascii=False)}\n\n=== transcript (verbatim, [m:ss] text) ===\n{tr}\n\n=== timeline, one line per 10 s (eyes=dominant 3x3 cell or state; on=seconds on-screen; sw=region switches; q=quality grade) ===\n{timeline}\n"
+
+
+FILL_RULES_LOCAL = """You are a senior UX researcher writing part of a usability report from a moderated think-aloud session with webcam eye tracking.
+Return ONE JSON object. Keys = EXACTLY the placeholder names listed below (all of them, none extra). Values = HTML strings (no markdown).
+Rules: cite evidence as said · eyes · time; quote the transcript verbatim (original language) with [m:ss]; eyes come from the timeline/moments
+(3x3 cells TL,TC,TR,ML,MC,MR,BL,BC,BR; states on_screen/off_left/off_right/down_keyboard/away/no_face); NEVER invent quotes, clicks or events;
+expression cues are cue-level, never emotions as facts. Wording tier: 'regions' = firm columns/halves; 'likely' = say 'likely'; 'unvalidated' =
+every gaze statement says 'estimated (unvalidated)' and findings lean on transcript/mouse/clicks/look-away. If evidence is thin, say so plainly.
+Formats: GRADE_TABLE/ROADMAP_ROWS/ACTION_LIST_ROWS/PLACEMENT_TABLE/PER_NEED_MAP = <tr><td>…</td>…</tr> rows only.
+FINDINGS_P0/FINDINGS_P1/FINDINGS_P2/DELIGHTERS = one or more blocks EXACTLY like:
+<div class="finding"><h3>ID · Title <span class="p0">P0</span></h3><p><b>Page:</b> … <b>Task:</b> …</p><span class="ar">"quote"</span>
+<div class="en">[m:ss] "translation"</div><div class="eyes">👁 <b>Eyes:</b> … ⏱ …</div><div class="rec"><b>Fix:</b> …</div></div>
+(use class p1/p2/keep and labels P1/P2/KEEP accordingly; DELIGHTERS use keep). SIGNAL_i ∈ Delight/Friction/Confusion/Request; FRICTION_i = 0-100;
+RECOMMENDATION_i, LATENCY_MEANING_i, INTENT_READS_AS_i, JOURNEY_SUMMARY = one or two sentences. APPENDIX_ENGLISH_i = English translation of the
+given line i (plain text). GRADE_TABLE rows: AI & intelligence · Visual design · Data clarity · Delight · Task efficiency · Actionability · Discoverability
+(score /10 or 'no evidence', with the evidence). Output JSON only."""
+
+
+def plan_groups(names, appendix):
+    """Split placeholders into focused calls a 14B model can answer well inside its context window."""
+    g = lambda pred: [n for n in names if pred(n)]
+    groups = []
+    ov = g(lambda n: n in ("GRADE_TABLE", "JOURNEY_SUMMARY", "PRODUCT_INSIGHTS", "ROADMAP_ROWS", "INSTRUMENT_NEXT") or re.match(r"^(SIGNAL|FRICTION|RECOMMENDATION)_\d+$", n))
+    fi = g(lambda n: n in ("FINDINGS_P0", "FINDINGS_P1", "DELIGHTERS", "FINDINGS_P2", "ACTION_LIST_ROWS"))
+    ti = g(lambda n: n in ("PLACEMENT_TABLE", "PER_NEED_MAP") or re.match(r"^(LATENCY_MEANING|INTENT_READS_AS)_\d+$", n))
+    if ov: groups.append(("overview", ov, ""))
+    if fi: groups.append(("findings", fi, ""))
+    if ti: groups.append(("timing", ti, ""))
+    ap = g(lambda n: n.startswith("APPENDIX_ENGLISH_"))
+    src = {a["n"]: a["speech"] for a in (appendix or [])}
+    for i in range(0, len(ap), 25):
+        chunk = ap[i:i + 25]
+        extra = "\n=== lines to translate (index → original) ===\n" + "\n".join(f"{n.split('_')[-1]}: {src.get(int(n.split('_')[-1]), '')}" for n in chunk)
+        groups.append((f"appendix{i//25+1}", chunk, extra))
+    return groups
+
 
 
 def write_with_claude(job, pf, est, t0):
@@ -313,35 +417,60 @@ def stage_fill(job):
             t = open(p, encoding="utf-8").read(); return t[:cap] if cap else t
         except Exception:  # noqa: BLE001
             return ""
-    local = st["backend"] == "ollama"
-    csv_txt = read(os.path.join(A, "gaze-ai.csv")); lines = csv_txt.splitlines()
-    csv_txt = "\n".join(lines[:1] + lines[1:(601 if local else 1201)])           # local models: keep the prompt within ~32k tokens
-    prompt = (FILL_RULES + f"\n\nWORDING TIER: {job.get('quality', {}).get('tier', 'unvalidated')}\nPLACEHOLDERS: {json.dumps(names)}\n\n"
-              f"=== report-data.json ===\n{read(os.path.join(A, 'report-data.json'), 30000 if local else 60000)}\n\n=== moments.json ===\n{read(os.path.join(A, 'moments.json'), 15000 if local else 40000)}\n\n"
-              f"=== transcript.srt ===\n{read(os.path.join(A, 'transcript.srt'), 30000 if local else 60000)}\n\n=== gaze-ai.csv (1 Hz) ===\n{csv_txt}\n")
-    pf = os.path.join(A, "fill-prompt.txt"); open(pf, "w", encoding="utf-8").write(prompt)
-    est = min(1200, (120 if local else 90) + len(prompt.encode("utf-8")) / (600 if local else 1200))
-    job["fill_est_s"] = int(est); job["model"] = st["model"]; save(job)
-    t0 = now()
-    res, err = write_with_ollama(job, prompt, est, t0) if local else write_with_claude(job, pf, est, t0)
-    if err == "interrupted":
-        return "interrupted"
-    if err:
-        raise RuntimeError(f"{st['backend']} failed: {err[-300:]}")
-    m = re.search(r"\{.*\}", res or "", re.S)
-    mapping = {}
-    if m:
+    tier = job.get("quality", {}).get("tier", "unvalidated"); job["model"] = st["model"]; save(job)
+    t0 = now(); mapping = {}
+    if st["backend"] == "ollama":
+        # ---- local model: compact evidence + several focused calls (a 300 KB single prompt overflows a 32k window) ----
         try:
-            mapping = json.loads(m.group(0))
-        except json.JSONDecodeError:
-            mapping = {}
+            appendix = json.load(open(os.path.join(A, "report-data.json"), encoding="utf-8")).get("appendix") or []
+        except Exception:  # noqa: BLE001
+            appendix = []
+        pack = evidence_pack(A)
+        groups = plan_groups(names, appendix)
+        per = min(600, 60 + len(pack.encode("utf-8")) / 250)
+        job["fill_est_s"] = int(per * len(groups)); save(job)
+        for k, (gname, gnames, extra) in enumerate(groups):
+            prompt = (FILL_RULES_LOCAL + f"\n\nWORDING TIER: {tier}\nPLACEHOLDERS (return all {len(gnames)} keys): {json.dumps(gnames)}\n{extra}\n\n" + pack)
+            open(os.path.join(A, f"fill-prompt-{gname}.txt"), "w", encoding="utf-8").write(prompt)
+            got = {}
+            for attempt in (1, 2):
+                res, err = write_with_ollama(job, prompt, per, now(), A, f"{gname}-{attempt}", pbase=k / len(groups), pspan=1 / len(groups))
+                if err == "interrupted":
+                    return "interrupted"
+                if err:
+                    raise RuntimeError(f"ollama failed: {err[-300:]}")
+                got = {kk: vv for kk, vv in _parse_mapping(res).items() if kk in gnames and vv}
+                if got:
+                    break
+            mapping.update(got)
+            missing = [n for n in gnames if n not in mapping]
+            logj(job, f"{gname}: {len(got)}/{len(gnames)} written" + (f" ({len(missing)} missing)" if missing else ""))
+            if missing:
+                job.setdefault("warnings", []).append(f"{gname}: {len(missing)} placeholder(s) not written by {st['model']}")
+    else:
+        # ---- Claude (opt-in): one call handles the full prompt ----
+        csv_txt = read(os.path.join(A, "gaze-ai.csv")); lines = csv_txt.splitlines()
+        csv_txt = "\n".join(lines[:1] + lines[1:1201])
+        prompt = (FILL_RULES + f"\n\nWORDING TIER: {tier}\nPLACEHOLDERS: {json.dumps(names)}\n\n"
+                  f"=== report-data.json ===\n{read(os.path.join(A, 'report-data.json'), 60000)}\n\n=== moments.json ===\n{read(os.path.join(A, 'moments.json'), 40000)}\n\n"
+                  f"=== transcript.srt ===\n{read(os.path.join(A, 'transcript.srt'), 60000)}\n\n=== gaze-ai.csv (1 Hz) ===\n{csv_txt}\n")
+        pf = os.path.join(A, "fill-prompt.txt"); open(pf, "w", encoding="utf-8").write(prompt)
+        est = min(1200, 90 + len(prompt.encode("utf-8")) / 1200); job["fill_est_s"] = int(est); save(job)
+        res, err = write_with_claude(job, pf, est, t0)
+        if err == "interrupted":
+            return "interrupted"
+        if err:
+            raise RuntimeError(f"claude failed: {err[-300:]}")
+        open(os.path.join(A, "fill-response-claude.json"), "w", encoding="utf-8").write(res or "")
+        mapping = _parse_mapping(res)
     if not mapping:
         job.setdefault("warnings", []).append(f"{st['model']} returned no usable JSON — report contains the data scaffold only")
     filled = re.sub(r"\{\{([A-Z_0-9]+)\}\}", lambda mm: str(mapping.get(mm.group(1), "")), html)
     filled = re.sub(r"<!--.*?-->", "", filled, flags=re.S)          # drop the scaffold's template/instruction comments
     open(os.path.join(A, "report-filled.html"), "w", encoding="utf-8").write(filled)
-    job["filled_placeholders"] = len([k for k in names if mapping.get(k)])
+    job["filled_placeholders"] = len([k for k in names if mapping.get(k)]); job["placeholders_total"] = len(names)
     return "ok"
+
 
 
 def stage_pdf(job):

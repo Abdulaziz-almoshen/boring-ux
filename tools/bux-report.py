@@ -234,6 +234,7 @@ def build(session, product):
     data = dict(session=name, site=site, duration_s=dur, tier=tier, click_consistency=cc, signs=Q.get("signs"), flags=Q.get("flags"), grade_histogram=Q.get("grade_histogram"),
                 gaze_usable_frac=Q.get("gaze_usable_frac"), footer=Q.get("footer"), stats=dict(eyes_away_frac=away, scan_rate_per_min=scan_rate, gaze_cols=dict(cols), gaze_cells=dict(cells),
                 clicks=len(clicks), dead_clicks=dead, rage_clicks=rage, transcript_segments=len(segs)), phases=score_rows, latency=lat, intent=intent, moments=M,
+                appendix=[dict(n=a["n"], time=a["time"], speech=a["speech"], ar=a["ar"]) for a in appendix],
                 placeholders=["PRODUCT_NAME", "GRADE_TABLE", "JOURNEY_SUMMARY", "SCORECARD_JUDGMENT", "PRODUCT_INSIGHTS", "ROADMAP_ROWS", "INSTRUMENT_NEXT", "FINDINGS_P0",
                               "LATENCY_MEANING", "FINDINGS_P1", "DELIGHTERS", "FINDINGS_P2", "ACTION_LIST_ROWS", "INTENT_READS_AS", "PLACEMENT_TABLE", "PER_NEED_MAP", "APPENDIX_ENGLISH"])
     json.dump(data, open(os.path.join(A, "report-data.json"), "w"), ensure_ascii=False, indent=1)

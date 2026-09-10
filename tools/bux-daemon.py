@@ -190,51 +190,136 @@ GRADE_TABLE: rows for AI & intelligence · Visual design · Data clarity · Deli
 If evidence is thin (no speech, no clicks), say so plainly inside the relevant placeholder instead of inventing. Output JSON only."""
 
 
+# ---- report writer backends -------------------------------------------------------------------------------
+# BUX_LLM = auto | ollama | claude | none.  Default "auto" = local Ollama when a model is present, otherwise "none"
+# (data report with the judgment sections marked as not written). Claude is used ONLY when explicitly requested.
+OLLAMA = os.environ.get("BUX_OLLAMA_URL", "http://127.0.0.1:11434")
+OLLAMA_MODEL = os.environ.get("BUX_LLM_MODEL", "gemma3:12b")
+
+
+def ollama_ready(start=True):
+    """True if the Ollama server answers and the configured model is pulled; starts the server if needed."""
+    import urllib.request
+    def tags():
+        with urllib.request.urlopen(OLLAMA + "/api/tags", timeout=3) as r:
+            return [m["name"] for m in json.loads(r.read()).get("models", [])]
+    try:
+        models = tags()
+    except Exception:  # noqa: BLE001
+        if not start or not which("ollama"):
+            return False, "ollama not running"
+        subprocess.Popen([which("ollama"), "serve"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        for _ in range(20):
+            time.sleep(1)
+            try:
+                models = tags(); break
+            except Exception:  # noqa: BLE001
+                continue
+        else:
+            return False, "ollama did not start"
+    ok = any(m == OLLAMA_MODEL or m.split(":")[0] == OLLAMA_MODEL.split(":")[0] for m in models)
+    return ok, ("ok" if ok else f"model {OLLAMA_MODEL} not pulled (have: {', '.join(models) or 'none'})")
+
+
+def llm_status():
+    mode = os.environ.get("BUX_LLM", "auto")
+    if mode == "claude":
+        return dict(backend="claude", model=os.environ.get("BUX_CLAUDE_MODEL", "claude-opus-5"), available=bool(which("claude")))
+    if mode == "none":
+        return dict(backend="none", model=None, available=True)
+    ok, why = ollama_ready(start=False)
+    if ok or mode == "ollama":
+        return dict(backend="ollama", model=OLLAMA_MODEL, available=ok, note=None if ok else why)
+    return dict(backend="none", model=None, available=True, note="no local model — " + why)
+
+
+def write_with_ollama(job, prompt, est, t0):
+    import urllib.request, math as _m
+    body = json.dumps(dict(model=OLLAMA_MODEL, stream=False, format="json",
+                           options=dict(num_ctx=32768, temperature=0.2, num_predict=8192),
+                           messages=[dict(role="user", content=prompt)])).encode()
+    req = urllib.request.Request(OLLAMA + "/api/chat", data=body, headers={"Content-Type": "application/json"}, method="POST")
+    result = {}
+    def run():
+        try:
+            with urllib.request.urlopen(req, timeout=3600) as r:
+                result["out"] = json.loads(r.read()).get("message", {}).get("content", "")
+        except Exception as e:  # noqa: BLE001
+            result["err"] = str(e)
+    th = threading.Thread(target=run, daemon=True); th.start()
+    while th.is_alive():
+        if CTRL[job["id"]]["cancel"] or CTRL[job["id"]]["pause"]:
+            return None, "interrupted"
+        el = now() - t0
+        set_progress(job, 2, min(0.97, 1 - _m.exp(-el / est)), eta_s=max(10, est - el) + 20)
+        th.join(2)
+    if "err" in result:
+        return None, result["err"]
+    return result.get("out", ""), None
+
+
+def write_with_claude(job, pf, est, t0):
+    import math as _m
+    claude = which("claude")
+    if not claude:
+        return None, "Claude Code CLI not found"
+    env = dict(os.environ, PATH="/opt/homebrew/bin:/usr/local/bin:" + os.environ.get("PATH", ""))
+    model = os.environ.get("BUX_CLAUDE_MODEL", "claude-opus-5")
+    with open(pf, encoding="utf-8") as fin:
+        p = subprocess.Popen([claude, "-p", "--model", model, "--output-format", "json"], stdin=fin, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env, cwd=REPO)
+    CTRL[job["id"]]["proc"] = p
+    while p.poll() is None:
+        if CTRL[job["id"]]["cancel"] or CTRL[job["id"]]["pause"]:
+            p.terminate(); return None, "interrupted"
+        el = now() - t0
+        set_progress(job, 2, min(0.97, 1 - _m.exp(-el / est)), eta_s=max(10, est - el) + 20)
+        time.sleep(2)
+    CTRL[job["id"]]["proc"] = None
+    out, err = p.communicate()
+    if p.returncode != 0:
+        return None, "claude failed: " + (err or out)[-300:]
+    try:
+        return json.loads(out).get("result", out), None
+    except json.JSONDecodeError:
+        return out, None
+
+
+NOT_WRITTEN = ('<div class="caveat"><b>Findings not written.</b> No local language model is configured on this Mac, so this report contains '
+               'the measured data (attention figure, scorecard, moments, timeline) without written findings. Install a local model '
+               '(Ollama + <code>gemma3:12b</code>) and re-run, or set <code>BUX_LLM=claude</code> to opt in to Claude.</div>')
+
+
 def stage_fill(job):
     A = os.path.join(job["folder"], "analysis"); scaffold = os.path.join(A, "report-scaffold.html")
     html = open(scaffold, encoding="utf-8").read()
     names = sorted(set(re.findall(r"\{\{([A-Z_]+(?:_\d+)?)\}\}", html)))
-    claude = which("claude")
-    if not claude:
-        job.setdefault("warnings", []).append("Claude Code CLI not found — findings not written; report contains the data scaffold only")
-        out = re.sub(r"\{\{[A-Z_0-9]+\}\}", "", html)
+    st = llm_status(); job["llm"] = st; save(job)
+    if st["backend"] == "none" or not st["available"]:
+        job.setdefault("warnings", []).append("findings not written: " + (st.get("note") or "no report-writing model available"))
+        out = re.sub(r"<h2>Overall grade</h2>", NOT_WRITTEN + "<h2>Overall grade</h2>", html, count=1)
+        out = re.sub(r"\{\{[A-Z_0-9]+\}\}", "", out)
         open(os.path.join(A, "report-filled.html"), "w", encoding="utf-8").write(out); return "skipped"
     def read(p, cap=None):
         try:
             t = open(p, encoding="utf-8").read(); return t[:cap] if cap else t
         except Exception:  # noqa: BLE001
             return ""
-    csv_txt = read(os.path.join(A, "gaze-ai.csv"))
-    lines = csv_txt.splitlines(); csv_txt = "\n".join(lines[:1] + lines[1:1201])          # cap 20 min of seconds
+    local = st["backend"] == "ollama"
+    csv_txt = read(os.path.join(A, "gaze-ai.csv")); lines = csv_txt.splitlines()
+    csv_txt = "\n".join(lines[:1] + lines[1:(601 if local else 1201)])           # local models: keep the prompt within ~32k tokens
     prompt = (FILL_RULES + f"\n\nWORDING TIER: {job.get('quality', {}).get('tier', 'unvalidated')}\nPLACEHOLDERS: {json.dumps(names)}\n\n"
-              f"=== report-data.json ===\n{read(os.path.join(A, 'report-data.json'), 60000)}\n\n=== moments.json ===\n{read(os.path.join(A, 'moments.json'), 40000)}\n\n"
-              f"=== transcript.srt ===\n{read(os.path.join(A, 'transcript.srt'), 60000)}\n\n=== gaze-ai.csv (1 Hz) ===\n{csv_txt}\n")
+              f"=== report-data.json ===\n{read(os.path.join(A, 'report-data.json'), 30000 if local else 60000)}\n\n=== moments.json ===\n{read(os.path.join(A, 'moments.json'), 15000 if local else 40000)}\n\n"
+              f"=== transcript.srt ===\n{read(os.path.join(A, 'transcript.srt'), 30000 if local else 60000)}\n\n=== gaze-ai.csv (1 Hz) ===\n{csv_txt}\n")
     pf = os.path.join(A, "fill-prompt.txt"); open(pf, "w", encoding="utf-8").write(prompt)
-    est = min(900, 90 + len(prompt.encode("utf-8")) / 1200)     # measured: ~300 KB prompt ≈ 5–6 min; scales with transcript length
-    job["fill_est_s"] = int(est); save(job)
+    est = min(1200, (120 if local else 90) + len(prompt.encode("utf-8")) / (600 if local else 1200))
+    job["fill_est_s"] = int(est); job["model"] = st["model"]; save(job)
     t0 = now()
-    env = dict(os.environ, PATH="/opt/homebrew/bin:/usr/local/bin:" + os.environ.get("PATH", ""))
-    model = os.environ.get("BUX_CLAUDE_MODEL", "claude-opus-5")   # judgment-heavy long-form writing → most capable model by default
-    job["model"] = model; save(job)
-    with open(pf, encoding="utf-8") as fin:
-        p = subprocess.Popen([claude, "-p", "--model", model, "--output-format", "json"], stdin=fin, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env, cwd=REPO)
-    CTRL[job["id"]]["proc"] = p
-    import math as _m
-    while p.poll() is None:
-        if CTRL[job["id"]]["cancel"] or CTRL[job["id"]]["pause"]:
-            p.terminate(); return "interrupted"
-        el = now() - t0
-        set_progress(job, 2, min(0.97, 1 - _m.exp(-el / est)), eta_s=max(10, est - el) + 20)   # asymptotic: never looks frozen
-        time.sleep(2)
-    CTRL[job["id"]]["proc"] = None
-    out, err = p.communicate()
-    if p.returncode != 0:
-        raise RuntimeError("claude failed: " + (err or out)[-300:])
-    try:
-        res = json.loads(out).get("result", out)
-    except json.JSONDecodeError:
-        res = out
-    m = re.search(r"\{.*\}", res, re.S)
+    res, err = write_with_ollama(job, prompt, est, t0) if local else write_with_claude(job, pf, est, t0)
+    if err == "interrupted":
+        return "interrupted"
+    if err:
+        raise RuntimeError(f"{st['backend']} failed: {err[-300:]}")
+    m = re.search(r"\{.*\}", res or "", re.S)
     mapping = {}
     if m:
         try:
@@ -242,7 +327,7 @@ def stage_fill(job):
         except json.JSONDecodeError:
             mapping = {}
     if not mapping:
-        job.setdefault("warnings", []).append("Claude returned no usable JSON — report contains the data scaffold only")
+        job.setdefault("warnings", []).append(f"{st['model']} returned no usable JSON — report contains the data scaffold only")
     filled = re.sub(r"\{\{([A-Z_0-9]+)\}\}", lambda mm: str(mapping.get(mm.group(1), "")), html)
     filled = re.sub(r"<!--.*?-->", "", filled, flags=re.S)          # drop the scaffold's template/instruction comments
     open(os.path.join(A, "report-filled.html"), "w", encoding="utf-8").write(filled)
@@ -326,7 +411,7 @@ class H(BaseHTTPRequestHandler):
     def do_GET(self):
         p = self.path.split("?")[0]
         if p == "/health":
-            return self._send(200, dict(ok=True, version=VERSION, jobs=len(JOBSTATE), claude=bool(which("claude")), ai_dir=AI, repo=REPO))
+            return self._send(200, dict(ok=True, version=VERSION, jobs=len(JOBSTATE), llm=llm_status(), ai_dir=AI, repo=REPO))
         if p == "/jobs":
             return self._send(200, sorted(JOBSTATE.values(), key=lambda j: -j["created"])[:50])
         m = re.match(r"^/jobs/([\w-]+)$", p)

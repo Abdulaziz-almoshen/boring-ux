@@ -8,7 +8,7 @@ with click-based bias correction, 10 Hz region states, per-second fusion with mo
 transcript, UX moments, quality grades and click-consistency gating.
 
 Usage:
-  source ~/Desktop/gaze-ai/.venv/bin/activate
+  source ~/.boring-ux/.venv/bin/activate
   python3 tools/bux-analyze-video.py <session-folder> [--fps 10] [--limit-s N] [--whisper-model ggml.bin]
 
 Outputs → <session>/analysis/: gaze-ai.csv (1 Hz fused), frames.csv, expressions.csv,

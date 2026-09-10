@@ -295,7 +295,8 @@ function showProc(job){
   const labels={queued:"Queued…",running:job.stage_label||"Processing…",paused:"Paused",done:"Report ready ✓",error:"Something went wrong",cancelled:"Cancelled"};
   $("bux-proc-stage").textContent=(labels[job.status]||job.status)+(job.status==="running"?` · ${pct}%`:"");
   const rel=(job.folder||"").split("/").pop()||"";
-  $("bux-proc-eta").textContent=job.status==="running"||job.status==="queued"?fmtEta(job.eta_s):job.status==="done"?"Opened · saved to Downloads/boring-ux/"+rel+"/report.pdf":job.status==="error"?(job.error||"see the service log"):job.status==="paused"?"Paused — resume when you're ready":"";
+  const writer=job.model?` · written locally by ${job.model}`:"";
+  $("bux-proc-eta").textContent=job.status==="running"||job.status==="queued"?fmtEta(job.eta_s):job.status==="done"?"Opened · saved to Downloads/boring-ux/"+rel+"/report.pdf"+writer:job.status==="error"?(job.error||"see the service log"):job.status==="paused"?"Paused — resume when you're ready":"";
   if(job.status==="done") saveReportOnce(job);
   $("bux-proc-log").textContent=(job.warnings||[]).concat((job.log||[]).slice(-2)).join(" · ");
   const pb=$("bux-proc-pause"), st=job.status;

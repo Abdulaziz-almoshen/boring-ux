@@ -42,7 +42,7 @@ CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 RATE = 0.30            # measured: analysis wall-clock ≈ 0.30 × video length on Apple Silicon (GPU)
 FILL_EST_S = 150       # typical claude fill time
 STAGES = [("analyze", "Analyzing eyes, face & expressions", 0.62), ("scaffold", "Building the report structure", 0.03),
-          ("fill", "Writing findings with Claude", 0.28), ("pdf", "Rendering the PDF", 0.04), ("open", "Opening the report", 0.03)]
+          ("fill", "Writing the findings (local model)", 0.28), ("pdf", "Rendering the PDF", 0.04), ("open", "Opening the report", 0.03)]
 for _d in (JOBS, LOGS, SESSIONS):
     os.makedirs(_d, exist_ok=True)
 

@@ -199,15 +199,19 @@ def stage_fill(job):
               f"=== report-data.json ===\n{read(os.path.join(A, 'report-data.json'), 60000)}\n\n=== moments.json ===\n{read(os.path.join(A, 'moments.json'), 40000)}\n\n"
               f"=== transcript.srt ===\n{read(os.path.join(A, 'transcript.srt'), 60000)}\n\n=== gaze-ai.csv (1 Hz) ===\n{csv_txt}\n")
     pf = os.path.join(A, "fill-prompt.txt"); open(pf, "w", encoding="utf-8").write(prompt)
+    est = min(900, 90 + len(prompt.encode("utf-8")) / 1200)     # measured: ~300 KB prompt ≈ 5–6 min; scales with transcript length
+    job["fill_est_s"] = int(est); save(job)
     t0 = now()
     env = dict(os.environ, PATH="/opt/homebrew/bin:/usr/local/bin:" + os.environ.get("PATH", ""))
     with open(pf, encoding="utf-8") as fin:
         p = subprocess.Popen([claude, "-p", "--output-format", "json"], stdin=fin, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env, cwd=REPO)
     CTRL[job["id"]]["proc"] = p
+    import math as _m
     while p.poll() is None:
         if CTRL[job["id"]]["cancel"] or CTRL[job["id"]]["pause"]:
             p.terminate(); return "interrupted"
-        set_progress(job, 2, min(0.95, (now() - t0) / FILL_EST_S), eta_s=max(15, FILL_EST_S - (now() - t0)) + 20)
+        el = now() - t0
+        set_progress(job, 2, min(0.97, 1 - _m.exp(-el / est)), eta_s=max(10, est - el) + 20)   # asymptotic: never looks frozen
         time.sleep(2)
     CTRL[job["id"]]["proc"] = None
     out, err = p.communicate()

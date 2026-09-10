@@ -357,7 +357,8 @@ def evidence_pack(A, max_transcript=14000, timeline_s=None):
         else:
             tr = ("NO SPEECH. The participant did not talk during this session (whisper produced only silence/hallucinations, which were removed). "
                   "There are NO quotes to cite. Every statement must rest on eyes, mouse, clicks and timing; write 'no speech' where a quote would go.")
-    tr = tr[:max_transcript]
+    if len(tr) > max_transcript:
+        tr = tr[:max_transcript] + f"\n[… transcript truncated: {len(tr) - max_transcript} more characters not shown to the writer]"
     rows = []
     try:
         rows = list(_csv.DictReader(open(os.path.join(A, "gaze-ai.csv"), encoding="utf-8")))

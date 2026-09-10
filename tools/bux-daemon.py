@@ -682,6 +682,9 @@ def stage_pdf(job):
 
 
 def stage_open(job):
+    if job.get("reprocess"):
+        logj(job, "report rebuilt (re-processing an existing session) — not opening it")
+        return "ok"                      # only a freshly recorded session opens its report by itself
     target = job.get("report_pdf") or job.get("report_html")
     if target and sys.platform == "darwin":
         subprocess.run(["open", target], capture_output=True)
@@ -810,7 +813,7 @@ class H(BaseHTTPRequestHandler):
             # from_stage: re-run only part of the pipeline on an already-analysed session (e.g. "fill" after switching the writer model)
             names = [s[0] for s in STAGES]
             if body.get("from_stage") in names and os.path.isdir(os.path.join(folder, "analysis")):
-                job.update(stage_index=names.index(body["from_stage"]), files_ready=True, video_s=round(video_seconds(folder), 1))
+                job.update(stage_index=names.index(body["from_stage"]), files_ready=True, video_s=round(video_seconds(folder), 1), reprocess=True)
                 try:
                     q = json.load(open(os.path.join(folder, "analysis", "quality.json")))
                     job["quality"] = dict(tier=q.get("click_consistency", {}).get("tier"), usable=q.get("gaze_usable_frac"), flags=q.get("flags"), moments=q.get("moments"))

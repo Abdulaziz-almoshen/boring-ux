@@ -17,9 +17,10 @@ you supply the judgment inside a fixed scaffold.
 
 2. **Video analysis** — if `<session>/analysis/gaze-ai.csv` is missing or older than `face.webm`:
    ```bash
-   source ~/Desktop/gaze-ai/.venv/bin/activate
-   python3 tools/bux-analyze-video.py <session> [--whisper-model ~/Desktop/gaze-ai/models/ggml-large-v3-turbo.bin]
+   source ~/.boring-ux/.venv/bin/activate          # (legacy installs: ~/Desktop/gaze-ai/.venv)
+   python3 tools/bux-analyze-video.py <session> [--whisper-model ~/.boring-ux/models/ggml-large-v3-turbo.bin]
    ```
+   Sessions processed by the local service live in `~/.boring-ux/sessions/<name>/` (the user's copy is in `~/Downloads/boring-ux/<name>/`).
    Writes `analysis/{gaze-ai.csv, expressions.csv, moments.json, quality.json, frames.csv, transcript.srt?, debug/}`.
    It aborts on a failed L2CS flip self-test — never work around that.
 

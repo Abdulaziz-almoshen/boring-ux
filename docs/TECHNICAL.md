@@ -15,8 +15,12 @@ Browser extension (Chrome/Edge, MV3)                Local processing service (Py
 ```
 
 - The extension runs inside the real page (no iframe, so any site works) and captures clicks/mouse natively.
-- The service is installed as a launch agent (`tools/install-daemon.sh`) and only listens on loopback. The extension talks to it
-  through its background service worker, so the tested page's CSP cannot interfere.
+- The service is installed as a launch agent (`tools/install-daemon.sh`) and only listens on loopback. Control calls go through the
+  extension's background service worker (immune to the tested page's CSP); file uploads go straight from the content script.
+- **macOS privacy rule that shapes the design:** background services cannot read `~/Desktop`, `~/Documents` or `~/Downloads`
+  without a manual Full Disk Access grant. So the service, its env and models live in `~/.boring-ux/`, the extension **uploads**
+  each session (`POST /sessions/<name>/<file>`) to `~/.boring-ux/sessions/`, and when the job is done the extension **pulls**
+  `report.pdf` back (`GET /jobs/<id>/report.pdf`) and saves it into `Downloads/boring-ux/<name>/` itself.
 - The live gaze dot in the panel uses WebGazer.js (region-level). The **report's gaze comes from the recorded video**, analysed offline.
 
 ## The offline analysis (`tools/bux-analyze-video.py`)
@@ -44,8 +48,8 @@ Outputs in `<session>/analysis/`: `gaze-ai.csv`, `expressions.csv`, `moments.jso
 
 ```bash
 brew install uv ffmpeg whisper-cpp
-bash tools/setup-analysis.sh --with-whisper          # env + models (add --with-daemon for the login service)
-source ~/Desktop/gaze-ai/.venv/bin/activate
+bash tools/setup-analysis.sh --with-whisper          # env + models in ~/.boring-ux (add --with-daemon, or --all, for the login service)
+source ~/.boring-ux/.venv/bin/activate
 python3 tools/bux-analyze-video.py ~/Downloads/boring-ux/<site>-<time>
 python3 tools/bux-report.py       ~/Downloads/boring-ux/<site>-<time> --product "Name"
 ```

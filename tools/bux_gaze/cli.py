@@ -4,6 +4,7 @@ import glob
 import json
 import math
 import os
+import re
 import subprocess
 import sys
 import time
@@ -37,9 +38,22 @@ def transcribe(session, out_dir, model_path, lang):
         return None, ["transcript_missing"]
     wav = os.path.join(out_dir, "audio16k.wav")
     subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", audio, "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", wav], check=True)
-    subprocess.run(["whisper-cli", "-m", model_path, "-f", wav, "-l", lang, "-osrt", "-of", os.path.join(out_dir, "transcript")], check=True,
-                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    return (srt if os.path.exists(srt) else None), ([] if os.path.exists(srt) else ["transcript_missing"])
+    cmd = ["whisper-cli", "-m", model_path, "-f", wav, "-l", lang, "-bs", "5", "-osrt", "-of", os.path.join(out_dir, "transcript")]
+    # Voice-activity gating (Silero VAD shipped with whisper.cpp): without it a silent opening window makes whisper hallucinate
+    # ("Thank you." / "ترجمة نانسي قنقر") and then repeat that text over the real speech for the rest of the file.
+    vad = os.path.join(os.path.dirname(model_path), "ggml-silero-v5.1.2.bin")
+    flags = []
+    if os.path.exists(vad):
+        cmd += ["--vad", "-vm", vad, "-vt", "0.5", "-vspd", "250", "-vsd", "300", "-vp", "200"]
+    else:
+        flags.append("no_vad_model")
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    m = re.search(r"auto-detected language: (\w+) \(p = ([\d.]+)\)", (r.stderr or "") + (r.stdout or ""))
+    if m:
+        flags.append(f"speech_lang={m.group(1)}:{float(m.group(2)):.2f}")
+    if r.returncode != 0:
+        flags.append("whisper_failed")
+    return (srt if os.path.exists(srt) else None), (flags if os.path.exists(srt) else flags + ["transcript_missing"])
 
 
 def spearman(a, b):

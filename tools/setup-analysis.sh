@@ -35,6 +35,9 @@ echo "▶ Models"
 if [ "$WITH_WHISPER" = 1 ]; then
   [ -s models/ggml-large-v3-turbo.bin ] || curl -L -C - --progress-bar -o models/ggml-large-v3-turbo.bin \
      "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin"      # 1.6 GB
+  # Silero voice-activity model (0.9 MB): whisper only decodes speech regions, so silence never turns into hallucinated text
+  [ -s models/ggml-silero-v5.1.2.bin ] || curl -L -C - -sS -o models/ggml-silero-v5.1.2.bin \
+     "https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v5.1.2.bin"
 fi
 
 echo "▶ System tools"

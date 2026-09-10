@@ -15,3 +15,4 @@ Boring UX is MIT-licensed. It runs these third-party components locally; their l
   [Gemma Terms of Use](https://ai.google.dev/gemma/terms).
 
 Report writing runs entirely on your Mac with that local model. Claude is never used unless you explicitly set `BUX_LLM=claude`.
+- **Silero VAD** (`ggml-silero-v5.1.2.bin`, packaged by ggml-org/whisper-vad) — MIT License. Used by whisper.cpp to skip non-speech audio.

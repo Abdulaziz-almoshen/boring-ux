@@ -427,7 +427,7 @@ def stage_fill(job):
             appendix = []
         pack = evidence_pack(A)
         groups = plan_groups(names, appendix)
-        per = min(600, 60 + len(pack.encode("utf-8")) / 250)
+        per = min(900, 120 + len(pack.encode("utf-8")) / 110)          # measured: a 22 KB chunk takes about 5 min on qwen3:14b (M-series GPU)
         job["fill_est_s"] = int(per * len(groups)); save(job)
         for k, (gname, gnames, extra) in enumerate(groups):
             prompt = (FILL_RULES_LOCAL + f"\n\nWORDING TIER: {tier}\nPLACEHOLDERS (return all {len(gnames)} keys): {json.dumps(gnames)}\n{extra}\n\n" + pack)

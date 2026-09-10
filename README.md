@@ -1,163 +1,45 @@
 <h1 align="center">😴 Boring UX</h1>
-<p align="center"><b>Open-source webcam eye-tracking usability lab.</b><br>
-Record a session, watch exactly where people looked, and turn it into a UX report — no lab, no hardware, no SaaS, no data leaving the browser.</p>
+<p align="center"><b>See where people really look when they use your product — with just a webcam.</b><br>
+Record a real user, and get a usability report that says what confused them, what they searched for, and what to fix.</p>
 
 <p align="center">
-<img src="screenshots/live-recording.png" width="90%" alt="Live recording — gaze heat trail over the page, WebGazer face mesh, and the live panel"/>
-<br><em>Live session — the precise-pixel <b>heat trail</b> follows the eyes across the page, the WebGazer <b>face mesh</b> tracks the participant, and the panel shows region + frustration signals in real time.</em>
+<img src="screenshots/live-recording.png" width="88%" alt="A live Boring UX session"/>
 </p>
-
-<p align="center">
-<img src="screenshots/replay-report.png" width="90%" alt="Session replay — gaze replay synced to audio and video"/>
-<br><em>Replay any session — the <b>gaze replay</b> plays synced to audio + video, with live left/center/right, 3×3 cell, and pixel readouts at the playhead.</em>
-</p>
-
----
-
-## 🚀 Set up in one message (Claude Code)
-
-Most people install Boring UX by pasting one prompt into **Claude Code** — it installs the models, the analysis pipeline and the local processing service, then walks you through loading the extension. After that there is **nothing to run**: record → **Stop** → the report opens by itself. The prompt is in **[ONBOARDING.md](ONBOARDING.md)**.
-
-## For product managers & designers
-
-You shipped a new flow. Does it actually **work** — not "did QA pass," but does a real human's **eyes** land where you intended, or do they hunt, hesitate, and rage-click? Analytics tell you *what* people clicked. They never tell you **where attention went, what confused them, or why they gave up.** Boring UX does — in an afternoon, for free.
-
-1. **Record** a real person using your new design, feature, or redesign — their **screen, voice (think-aloud), face, and exactly where their eyes go.**
-2. **Watch it back** — see the gaze miss your new button, the moment confusion hits, the 90 seconds they stall on one form field.
-3. **Get the report** — every finding tied to **what they said × where they looked × how long it took**, scored and turned into a **RICE-prioritized backlog** you drop straight into Jira/Linear.
-
-The output isn't a dashboard — it's a **decision**: *"Users can't find 'New Leave' — 8-minute hunt, eyes drifting off-screen → move it top-right. P0."* Hand that to engineering on Monday.
-
-> No \$30k eye-tracker. No SaaS seat. No recruiting agency. No data leaving your laptop. Just **proof of where attention goes** — the one thing you can't fake and can't measure any other way.
-
-## Why "Boring UX"?
-
-Great UX is **boring** — invisible, frictionless, nobody notices it. Bad UX is exciting: people hunt, hesitate, rage-click. **Boring UX finds the exciting parts so you can make them boring.** It watches a real user's **eyes, voice, screen, and clicks**, then shows you where attention went, where they got stuck, and what to fix.
-
-Usability testing normally means a $30k eye-tracker or a per-seat SaaS. This does the 80% that matters with a **webcam and a browser** — and it's yours.
 
 ## What it does
 
-- 🧩 **Runs on any website** — a Chrome/Edge extension that works inside the real page. No server, no code snippet, no iframe.
-- 🎥 **Records** webcam face + mic audio (+ optional screen), all **streamed straight to disk** (can't corrupt, even on long sessions).
-- 👁 **Two gaze layers** — coarse **left / center / right** regions, and a **precise-pixel heat trail** — from the webcam via [WebGazer](https://webgazer.cs.brown.edu/).
-- ⏱ **Auto-captures** clicks, mouse path, per-page time, and **frustration signals** (dead clicks, rage clicks, scroll-thrash) — natively, no snippet needed.
-- 🧠 **Saves one self-contained `SESSION-AI.md`** in every session folder — hand it to Claude/ChatGPT (or run Claude Code) to get a **full, evidence-based UX report** that fuses gaze + what they said + timing.
+1. **Records** a person using your website — their eyes, their face, their voice as they think aloud, and their mouse and clicks.
+2. **Understands** the session on your own Mac: where they looked, when they got stuck, when they went searching, how they reacted.
+3. **Writes the report** — findings tied to what they *said*, where they *looked*, and how long it *took*, with a prioritized list of fixes. It opens by itself when it's ready.
 
-100% client-side. Your recordings never leave your machine.
+Nothing leaves your computer. Great UX is boring — invisible and frictionless. Boring UX finds the exciting parts so you can make them boring.
 
-## Quick start — the browser extension
+## Set it up (once, in one message)
 
-Boring UX is a **Chrome/Edge extension**. It runs *inside the real page* (like Hotjar/FullStory), so it works on **any website on the web** — no server, no `tracker.js` snippet, no iframe — and it captures clicks + mouse natively.
+Paste the prompt from **[ONBOARDING.md](ONBOARDING.md)** into **Claude Code**. It installs everything and walks you through loading the browser extension. Takes about ten minutes, mostly downloads.
 
-### Install once (Chrome / Edge)
-1. Download this repo — green **Code ▸ Download ZIP**, then unzip (or `git clone`).
-2. Open **`chrome://extensions`** → turn on **Developer mode** (top-right).
-3. Click **Load unpacked** → select the **`extension/`** folder inside this repo.
-4. Boring UX appears in your toolbar (pin it via the puzzle-piece icon). ✅ You never repeat this.
+## Run a session
 
-### Record a session — the one journey
-| # | Do this |
-|---|---|
-| 1 | Open the **website you want to test** — logged in, on the page where the task starts. |
-| 2 | Click the **Boring UX** toolbar icon → a small panel appears in the page. |
-| 3 | **Enable camera → Calibrate** (look at the 13 dots; it shows your accuracy). |
-| 4 | Click **● Start** → the participant does the task **while talking out loud**. They never see their face or the gaze dot. |
-| 5 | Click **■ Stop & save** → camera shuts off, the panel resets, and the session saves. |
+1. Open the website you want to test and click the **Boring UX** icon.
+2. **Enable camera → Calibrate → Start.** Ask the person to do a task and **talk aloud** while they do it.
+3. Click **Stop & save.**
 
-**Where it saves:** one folder → **`Downloads/boring-ux/<site>-<date-time>/`** containing
-`gaze.csv` · `mouse.csv` · `events.csv` · `session.json` · **`SESSION-AI.md`** · `face.webm` · `audio.webm` (+ `screen.webm` if you shared the screen).
+That's it. The panel turns into a progress view; you can close the tab and come back. A few minutes later the report opens.
 
-> ⚠ Keep the tab in front while recording — eye tracking pauses on hidden tabs (it warns you and marks the gap). The **webcam preview is hidden by default** (still recorded to `face.webm`); a toggle shows a small corner preview for framing.
+## What you get
 
-### Get the report
-Open **`SESSION-AI.md`** from the session folder — it's **one self-contained file**: the session data **plus** the complete instructions to turn it into the graded UX report (transcription → gaze/speech fusion → dashboard graphs → feature scorecard → findings → RICE backlog → intent heatmaps, with an example and the design spec).
+A single report (PDF + web page) with an overall grade, a journey map with the emotional track, the moments that mattered — searching, confusion, hesitation, delight — each backed by a quote, where the eyes were, and the timing, and a ranked list of what to fix first. Everything is saved in `Downloads/boring-ux/<site>-<time>/`.
 
-- **Paste into Claude / ChatGPT:** hand over `SESSION-AI.md` (+ the folder). It has everything, including the one local command to transcribe the audio.
-- **Run the bundled skill:** open **Claude Code** in the session folder and say *"analyze this session"* — the `.claude/skills/boring-ux-report` skill transcribes, fuses, and writes `report.html` + `report.pdf`.
+## Good to know
 
-You get the complete report: overall grade, attention graphs, feature-by-feature scorecard, intent heatmaps ("where do users look when confused vs. acting"), findings, a RICE backlog, and a full fused transcript appendix.
+- **Talk aloud.** Speech is half the evidence. A silent session gives a much thinner report.
+- **Keep the tab in front** while recording — eye tracking pauses when the tab is hidden.
+- **Webcam eye tracking is about regions, not pixels.** It reliably tells left / center / right and up / down, and when someone looks away — not which of two neighboring buttons. The report is honest about this on every page.
+- **Press "Sign self-test"** once per session (8 seconds) so the analysis can prove it has left and right the right way round.
 
-### 🧠 Analyze the video with AI (offline, recommended)
-The recorded `face.webm` is the primary gaze source: it's post-processed on your Mac with **L2CS-Net** (gaze direction) and **MediaPipe** (blink, head pose, expression cues), mapped to screen regions with **no calibration dots**, and fused per second with mouse, clicks and the think-aloud transcript. Design + verified conventions: [`docs/GAZE-FROM-VIDEO-DESIGN.md`](docs/GAZE-FROM-VIDEO-DESIGN.md).
+## More
 
-**One-time setup** (Python 3.12 env + models; add `--with-whisper` for transcripts, +1.6 GB):
-```bash
-brew install uv ffmpeg whisper-cpp
-bash tools/setup-analysis.sh --with-whisper
-```
-
-**Analyze a session, then build the report:**
-```bash
-source ~/Desktop/gaze-ai/.venv/bin/activate
-python3 tools/bux-analyze-video.py ~/Downloads/boring-ux/<site>-<time>     # → <session>/analysis/
-python3 tools/bux-report.py       ~/Downloads/boring-ux/<site>-<time> --product "Your product"
-```
-`analysis/` gets `gaze-ai.csv` (per-second gaze cell/state + mouse + clicks + speech + expression cues + quality grade), `moments.json` (SEARCHING, FOUND→ACTED, CONFUSION, LOOK-AWAY, FRUSTRATION with evidence), `quality.json` (sign self-tests, click-consistency, grades), `expressions.csv`, `transcript.srt`, and the report scaffold. Then run the **`boring-ux-report`** skill (Claude Code in the repo: *"analyze this session"*) to fill the findings and render `report.html` + `report.pdf`.
-
-**How long it takes** (Apple Silicon, measured): video analysis ≈ **0.3× real time** (a 10-min recording ≈ 3 min; CPU-only ≈ 10× slower), transcription ≈ 20× real time (10 min ≈ 30 s), scaffold ≈ 1 s. In the panel, run the **8-s sign self-test** once per session (LEFT/RIGHT/TOP/BOTTOM) so the analysis can prove its own orientation.
-
-### Locked-down sites (`Permissions-Policy: camera=()`)
-A few sites disable the camera for everything in their page via a `Permissions-Policy` header — so even with camera permission granted, in-page tracking is blocked. For these, the extension applies a **local testing override**: on activation it strips that header (and `X-Frame-Options`) from the response **in your browser only**, for the domain you're testing, then reloads so the camera works.
-
-> ⚠️ **Use responsibly.** This override changes **nothing** on the site's servers and affects **no other user** — it only alters the response your own browser enforces, for sites you own or are **authorized to test**. It's the same technique QA tools (e.g. Requestly) use for internal testing. It is **not** a way to attack a site, and it should stay **off for normal browsing** (it's scoped per-domain and is removed when you disable the extension). Don't use it on sites you don't have permission to test.
-
-## What a session folder contains
-
-| File | What it is |
-|---|---|
-| **`SESSION-AI.md`** | **the one file you need** — metadata + accuracy + unified gaze/mouse/event timeline **and** the full instructions to generate the report |
-| `gaze.csv` | every gaze sample: `t_ms, x, y, region (L/C/R), cell (3×3)` |
-| `mouse.csv` | continuous cursor path |
-| `events.csv` | pages, clicks (+ gaze region), field fill-times, dead/rage/scroll signals |
-| `session.json` | duration, viewport, gaze distribution, signals, `gazeAccuracyPx` |
-| `face.webm` | webcam face + voice |
-| `audio.webm` | audio only |
-| `screen.webm` | screen recording + voice (only if you shared the screen) |
-
-> **Recorded before Sept 9, 2026 and `face.webm`/`screen.webm` won't play?** A data-URL bug saved them as base64 text (audio was unaffected). Nothing is lost — run `python3 tools/recover-webm.py ~/Downloads/boring-ux` to decode them back to valid video.
-
-## Models & licenses (read this if you use Boring UX commercially)
-
-Everything runs locally and costs nothing to run. Licenses differ, though:
-
-| Component | License | Commercial use |
-|---|---|---|
-| MediaPipe FaceLandmarker (face, iris, blink, head pose, expression cues) | Apache-2.0 | ✅ |
-| whisper.cpp + Whisper `large-v3-turbo` (speech → transcript) | MIT (code and weights) | ✅ |
-| L2CS-Net code | MIT | ✅ |
-| **L2CS-Net weights** (`L2CSNet_gaze360.pkl`, trained on Gaze360) | Gaze360 **Research License — non-commercial** | ⚠️ research / internal evaluation only |
-| WebGazer.js (live gaze dot in the extension) | GPLv3 (LGPLv3 available to companies under $1M valuation) | ✅ copyleft — the extension bundle inherits it |
-| PyTorch, OpenCV, PyAV, ffmpeg (called as a binary) | BSD / Apache-2.0 / BSD / LGPL-GPL | ✅ |
-| Claude (writes the report findings) | your Claude Code plan / API usage | the only paid step |
-
-If the gaze-weights restriction matters to you, use a MediaPipe-only gaze signal (iris + eye-look blendshapes → left/center/right; Apache-2.0) — coarser than L2CS but fully commercial-clean. Sources: [Gaze360 license](https://github.com/erkil1452/gaze360/blob/master/LICENSE.md), [L2CS-Net](https://github.com/ahmednull/l2cs-net), [WebGazer license](https://github.com/brownhci/WebGazer/blob/master/LICENSE.md).
-
-## Honest limitations
-
-- **Webcam gaze is region-accurate, not pixel-perfect.** The extension tracks gaze with **MediaPipe FaceLandmarker** (per-eye **iris landmarks + 3D head-pose**) mapped to the screen by a ridge regression — a big step up from classic 2D webcam trackers. It's still fought three more ways: a required **13-point calibration**, a **validation pass that measures your real accuracy in px** (saved into `session.json` as `gazeAccuracyPx`), and **continuous recalibration from every in-page click**. Still: great for regions and heatmaps, not for telling two adjacent buttons apart — hardware trackers exist for that.
-- **Calibrate every session** — the panel warns you before starting uncalibrated; the measured accuracy score tells you when to redo it (aim for <140px).
-- **Keep the recording tab in front** — Chrome pauses eye tracking on hidden tabs (the panel warns you and marks the gap).
-- The report's *spoken* analysis needs a transcription step (Whisper, one local command — private; the exact command is inside `SESSION-AI.md`).
-
-## How it works
-
-The **extension** injects a content script into the real page and runs an **eye-sphere 3D gaze model** ported from [JEOresearch/EyeTracker](https://github.com/JEOresearch/EyeTracker)'s `Webcam3DTracker`: **MediaPipe FaceLandmarker** gives face + iris landmarks; a head coordinate frame is built from nose landmarks by PCA; each eyeball center is locked as a head-local offset behind the iris at calibration; per frame the gaze direction (iris − eyeball-center, both eyes) becomes yaw/pitch, mapped to the screen by a 2nd-order fit over the 13 calibration dots. It records `MediaRecorder` tracks (face/audio/optional screen) streamed to disk, and logs gaze + clicks + mouse + page changes on one clock — natively, so no snippet is required. On stop it writes the whole session into one `Downloads/boring-ux/<site>-<time>/` folder via the `chrome.downloads` API, with a self-contained `SESSION-AI.md`. Everything is vanilla JS — no build step; MediaPipe's WASM + model are bundled in `extension/vendor/mediapipe/`. The gaze approach is adapted from [JEOresearch/EyeTracker](https://github.com/JEOresearch/EyeTracker)'s webcam 3D tracker, ported to run in the browser.
-
-<details>
-<summary><b>Optional: the localhost recorder</b> (only for a site you're building locally)</summary>
-
-The repo also ships a standalone in-browser recorder (`index.html` + `analyze.html`) that hosts your site in an iframe. It's optional and **only** useful for a local dev site — it can't load sites that block framing, and it needs the `tracker.js` snippet on your page to capture clicks. For everything else, use the extension above.
-
-```bash
-python3 -m http.server 8000   # then open http://localhost:8000 in Chrome
-```
-</details>
-
-## Contributing
-
-Issues and PRs welcome — ideas: continuous mouse-move capture, in-browser transcription (Whisper WASM), AOI (area-of-interest) tagging, multi-session aggregation, a hosted demo.
-
-## License
-
-[MIT](LICENSE) — do what you like, no warranty.
+- [ONBOARDING.md](ONBOARDING.md) — the setup prompt for Claude Code
+- [docs/TECHNICAL.md](docs/TECHNICAL.md) — how it works, models and licenses, the analysis pipeline, limitations
+- [docs/GAZE-FROM-VIDEO-DESIGN.md](docs/GAZE-FROM-VIDEO-DESIGN.md) — the full design of the eye-tracking analysis
+- [CONTRIBUTING.md](CONTRIBUTING.md) · [MIT License](LICENSE)

@@ -29,7 +29,7 @@ Set up Boring UX (open-source webcam eye-tracking usability testing) on this Mac
 6. If anything fails, read tools/ (and its comments) to diagnose, fix it, and re-verify. Finish by telling me,
    in plain language, how to run a real usability session and where reports are saved.
 Note: the service runs a staged copy of the repo's tools from ~/.boring-ux/app (macOS blocks background services from
-reading ~/Desktop). Whenever the repo is updated (git pull), re-run: bash tools/install-daemon.sh
+reading ~/Desktop). Whenever the repo is updated (git pull), re-run: bash tools/install-daemon.sh — and click the reload icon on the Boring UX card in chrome://extensions.
 ```
 
 ## What gets installed (all local, nothing leaves your Mac)
@@ -41,6 +41,7 @@ reading ~/Desktop). Whenever the repo is updated (git pull), re-run: bash tools/
 
 ## After setup — the whole workflow for a product person
 1. Open the site to test → click **Boring UX** → **Enable camera → Calibrate → Start** → (press **Sign self-test** once) → do the task **talking aloud** → **Stop & save**.
+   While recording, the panel shows a **mic level bar** and **live captions** (local whisper) so you can see the microphone is working. **Stay on the recording tab**: Chrome freezes the camera while the tab is hidden, and those seconds are reported as *tab switched*, not as attention.
 2. The panel turns into **Processing…** with stages, progress and time remaining. You can close the tab; it continues, and any tab shows the same job. Pause/resume if you need the Mac.
 3. When done, `report.pdf` opens and is saved next to the recording in `~/Downloads/boring-ux/<site>-<time>/`. (The service keeps its working copy and the full `analysis/` folder in `~/.boring-ux/sessions/<site>-<time>/`.)
 

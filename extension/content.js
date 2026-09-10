@@ -91,7 +91,9 @@ function onGaze(data){
     if(col){ if(S.lastRegion&&S.lastGazeT) S.regionTime[S.lastRegion]+=(t-S.lastGazeT); S.lastRegion=col; S.lastGazeT=t; }
   }
 }
-async function waitFeed(){ for(let i=0;i<40;i++){ const v=document.getElementById("webgazerVideoFeed"); if(v&&v.srcObject&&v.srcObject.getVideoTracks().length) return v.srcObject.getVideoTracks()[0]; await sleep(200);} return null; }
+/* Returns the live camera track, or THROWS. It must never return undefined: the caller then set camReady=true with no
+   track at all, the panel said "Camera on ✓", and Start silently recorded no face video (session of 2026-09-10). */
+async function waitFeed(){ for(let i=0;i<40;i++){ const v=document.getElementById("webgazerVideoFeed"); if(v&&v.srcObject&&v.srcObject.getVideoTracks().length) return v.srcObject.getVideoTracks()[0]; await sleep(200);} throw new Error("the camera preview never appeared — the site or Chrome blocked the camera"); }
 
 $("bux-cam-view").onclick = () => {
   const on = document.documentElement.classList.toggle("bux-show-cam");
@@ -109,7 +111,7 @@ $("bux-cam").onclick = async () => {
     // Turn that off so gaze is driven by the eyes + our explicit calibration dots only.
     try{ webgazer.removeMouseEventListeners(); }catch(_){}
     try{ webgazer.showFaceOverlay(false); webgazer.showFaceFeedbackBox(false); }catch(_){}
-    S.camTrack = await waitFeed(); S.camReady=true;
+    S.camTrack = await waitFeed(); S.camReady = !!S.camTrack;
     $("bux-cam").textContent="Camera on ✓"; $("bux-cal-btn").disabled=false; $("bux-start").disabled=false; $("bux-cam-view").disabled=false;
     dot.style.display="block"; setHint("Face hidden by default. Calibrate, then Start. (Camera still records to face.webm.)");
   }catch(e){
@@ -208,7 +210,7 @@ document.addEventListener("visibilitychange",()=>{ if(!S.recording)return; if(do
 /* ---------- record ---------- */
 function mime(){ return ["video/webm;codecs=vp9,opus","video/webm;codecs=vp8,opus","video/webm"].find(m=>MediaRecorder.isTypeSupported(m))||""; }
 $("bux-start").onclick = async () => {
-  if(!S.camReady){ alert("Enable camera first"); return; }
+  if(!S.camReady||!S.camTrack||S.camTrack.readyState!=="live"){ alert("The camera is not running — press Enable camera and allow it, then Start."); return; }
   if(!S.calibrated && !confirm("Gaze not calibrated — accuracy will be poor. OK = record anyway, Cancel = calibrate.")){ startCal(); return; }
   try{ S.mic = await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true}}); }catch(e){ S.mic=null; }
   startMicMeter();
@@ -222,6 +224,8 @@ $("bux-start").onclick = async () => {
   const rec=(stream,key,vb)=>{ if(!stream)return; const opts={mimeType:m}; if(vb)opts.videoBitsPerSecond=vb; let r; try{r=new MediaRecorder(stream,opts);}catch(e){r=new MediaRecorder(stream);}
     r.ondataavailable=e=>e.data.size&&S.chunks[key].push(e.data); r.start(1000); S.recorders.push(r); };
   if(S.camTrack) rec(new MediaStream([S.camTrack.clone(), ...(S.mic?[S.mic.getAudioTracks()[0].clone()]:[])]),"face",1200000);
+  /* the face video is the whole point: if no data arrives in the first seconds, say so instead of finding out at Stop */
+  setTimeout(()=>{ if(S.recording&&!S.chunks.face.length) setHint("⚠ No camera frames are being recorded. Stop, press Enable camera again, and keep this tab in front."); },6000);
   if(S.mic) rec(S.mic,"audio",0);
   if(screen){ const sv=screen.getVideoTracks()[0]; sv.addEventListener("ended",()=>S.recording&&stop());
     rec(new MediaStream([sv,...(S.mic?[S.mic.getAudioTracks()[0].clone()]:[])]),"screen",2500000); }

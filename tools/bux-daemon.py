@@ -172,8 +172,10 @@ def ollama_unload():
     """Free the writer model (~14 GB resident) before the analysis stage — on a 24 GB Mac both together push the system into swap."""
     try:
         import urllib.request as _u
-        body = json.dumps(dict(model=OLLAMA_MODEL or "", keep_alive=0)).encode()
-        _u.urlopen(_u.Request("http://127.0.0.1:11434/api/generate", data=body, headers={"Content-Type": "application/json"}), timeout=10).read()
+        loaded = json.loads(_u.urlopen("http://127.0.0.1:11434/api/ps", timeout=5).read() or b"{}").get("models") or []
+        for m_ in loaded or [dict(name=OLLAMA_MODEL or "")]:
+            body = json.dumps(dict(model=m_.get("name") or m_.get("model") or "", keep_alive=0)).encode()
+            _u.urlopen(_u.Request("http://127.0.0.1:11434/api/generate", data=body, headers={"Content-Type": "application/json"}), timeout=10).read()
     except Exception:  # noqa: BLE001
         pass
 
@@ -181,7 +183,7 @@ def ollama_unload():
 def stage_analyze(job):
     ollama_unload()
     vs = job["video_s"] or 60
-    whisper = glob.glob(os.path.join(AI, "models", "ggml-*.bin"))
+    whisper = sorted(f for f in glob.glob(os.path.join(AI, "models", "ggml-*.bin")) if "silero" not in f)
     cmd = [PY, os.path.join(REPO, "tools", "bux-analyze-video.py"), job["folder"]] + (["--whisper-model", whisper[0]] if whisper else [])
     t0 = now()
     def on_line(line):
@@ -349,8 +351,12 @@ def evidence_pack(A, max_transcript=14000, timeline_s=None):
                             dwell=m.get("gaze_dwell"), said=(m.get("transcript") or "")[:120], clicks=[c.get("target_text") for c in (m.get("clicks") or [])][:3]) for m in M[:60]]
     tr = "\n".join(f"[{a['time']}] {a['speech']}" for a in (D.get("appendix") or []) if a.get("speech") and a["speech"] != "(no transcript)")
     if not tr:   # the raw whisper file is NOT a fallback: on silence it contains only hallucinations ("Thank you.")
-        tr = ("NO SPEECH. The participant did not talk during this session (whisper produced only silence/hallucinations, which were removed). "
-              "There are NO quotes to cite. Every statement must rest on eyes, mouse, clicks and timing; write 'no speech' where a quote would go.")
+        if any(f in ("transcript_missing", "whisper_failed") for f in (D.get("flags") or [])):
+            tr = ("TRANSCRIPT UNAVAILABLE (no audio file or the transcriber failed). Do NOT claim the participant was silent and do NOT invent quotes; "
+                  "write 'no transcript' where a quote would go.")
+        else:
+            tr = ("NO SPEECH. The participant did not talk during this session (whisper produced only silence/hallucinations, which were removed). "
+                  "There are NO quotes to cite. Every statement must rest on eyes, mouse, clicks and timing; write 'no speech' where a quote would go.")
     tr = tr[:max_transcript]
     rows = []
     try:
@@ -366,8 +372,9 @@ def evidence_pack(A, max_transcript=14000, timeline_s=None):
         on = sum(1 for r in w if r.get("gaze_state") == "on_screen")
         sw = sum(int(float(r.get("region_switches") or 0)) for r in w)
         mouse = _C(r["mouse_cell"] for r in w if r.get("mouse_cell"))
-        clicks = [c.get("target_text") or "click" for r in w for c in json.loads(r.get("clicks") or "[]")]
-        said = " ".join(dict.fromkeys(r["speech_text"] for r in w if r.get("speech_text")))[:90]
+        ccount = _C((c.get("target_text") or "click") + (" (dead)" if c.get("is_dead") else "") for r in w for c in json.loads(r.get("clicks") or "[]"))
+        clicks = [f"{k} ×{v}" if v > 1 else k for k, v in ccount.items()]
+        said = " ".join(dict.fromkeys(t for r in w for t in ((r.get("speech_segs_txt") or r.get("speech_text") or "").split(" ¦ ")) if t))[:120]
         expr = _C(r["expr_label"] for r in w if r.get("expr_label") and r["expr_label"] != "neutral")
         q = _C(r["quality_grade"] for r in w if r.get("quality_grade"))
         t = int(float(w[0]["t_s"]))
@@ -385,10 +392,10 @@ Keep it literal; keep UI words (button names, field labels) as said. Output JSON
 FILL_RULES_LOCAL = """You are a senior UX researcher writing part of a usability report from a moderated think-aloud session with webcam eye tracking.
 Return ONE JSON object. Keys = EXACTLY the placeholder names listed below (all of them, none extra). Values = HTML strings (no markdown).
 Rules: cite evidence as said · eyes · time; quote the transcript verbatim (original language) with [m:ss]; eyes come from the timeline/moments
-(3x3 cells TL,TC,TR,ML,MC,MR,BL,BC,BR; states on_screen/off_left/off_right/down_keyboard/away/no_face/camera_frozen — camera_frozen = Chrome delivered no camera frames (the tab was hidden or the participant switched apps): it is NOT attention data and never a 'look away'; CAMERA_FROZEN moments report it); NEVER invent quotes, clicks or events;
+(3x3 cells TL,TC,TR,ML,MC,MR,BL,BC,BR; states on_screen/off_left/off_right/down_keyboard/away/no_face/camera_frozen — camera_frozen = no camera frames arrived (tab hidden, app switch or recorder stall): NOT attention data, never a 'look away'; CAMERA_FROZEN moments report it; DEAD_CLICKS moments = bursts of clicks on something that did not respond); NEVER invent quotes, clicks or events;
 expression cues are cue-level, never emotions as facts. Wording tier: 'regions' = firm columns/halves; 'likely' = say 'likely'; 'unvalidated' =
 every gaze statement says 'estimated (unvalidated)' and findings lean on transcript/mouse/clicks/look-away. If evidence is thin, say so plainly.
-Formats: GRADE_TABLE/ROADMAP_ROWS/ACTION_LIST_ROWS/PLACEMENT_TABLE/PER_NEED_MAP = <tr><td>…</td>…</tr> rows only.
+Formats (rows only, EXACT cell counts): GRADE_TABLE 3 cells (dimension · score /10 or "no evidence" · why/evidence); ROADMAP_ROWS 5 (Now/Next/Later · ship · why · impact · effort); ACTION_LIST_ROWS 5 (# · P0/P1/P2 · page · action · evidence said·eyes·time); PLACEMENT_TABLE 4 (when the user wants to… · eyes concentrate… · behaviour · so place it…); PER_NEED_MAP 5 (need · intent · where the eyes went · verdict · fix).
 FINDINGS_P0/FINDINGS_P1/FINDINGS_P2/DELIGHTERS = one or more blocks EXACTLY like:
 <div class="finding"><h3>ID · Title <span class="p0">P0</span></h3><p><b>Page:</b> … <b>Task:</b> …</p><span class="ar">"quote"</span>
 <div class="en">[m:ss] "translation"</div><div class="eyes">👁 <b>Eyes:</b> … ⏱ …</div><div class="rec"><b>Fix:</b> …</div></div>
@@ -411,7 +418,7 @@ DELIGHTERS = 0-3 blocks (D1…, class keep, label KEEP): things that clearly wor
 Every block MUST start from one specific moment or transcript line in the evidence (its [m:ss] appears in the block). A tier with nothing
 that qualifies MUST be exactly <p>No evidence for this tier in this session.</p> — an empty tier is correct; an invented quote or a padded
 block is a failure. LOOK_AWAY / no_face moments are not findings unless they interrupt a task step. When there is no speech, the quote span
-holds the words "no speech" and the block rests on eyes/mouse/clicks. ACTION_LIST_ROWS = one <tr><td>ID</td><td>action</td><td>owner</td><td>priority</td></tr> per block.
+holds the words "no speech" and the block rests on eyes/mouse/clicks. ACTION_LIST_ROWS = one <tr><td>#</td><td>P0/P1/P2</td><td>page</td><td>action</td><td>evidence (said · eyes · time)</td></tr> per block.
 """
 
 
@@ -467,56 +474,78 @@ NOT_WRITTEN = ('<div class="caveat"><b>Findings not written.</b> No local langua
 
 
 def _norm_txt(t):
+    """Letters/digits only, Arabic orthography folded (أإآ→ا, ة→ه, ى→ي, no diacritics/tatweel/punctuation) so a verbatim quote survives re-punctuation."""
     import html as _h
-    return re.sub(r"[^\w\u0600-\u06FF]+", "", _h.unescape(re.sub(r"<[^>]+>", "", t or ""))).lower()
+    t = _h.unescape(re.sub(r"<[^>]+>", "", t or ""))
+    t = re.sub(r"[\u064B-\u0652\u0640]", "", t).replace("أ", "ا").replace("إ", "ا").replace("آ", "ا").replace("ة", "ه").replace("ى", "ي")
+    return re.sub(r"[^\w]+", "", t).lower()
 
 
 def verify_findings(mapping, speech_text, no_speech):
     """Honesty check that does not trust the writer: drop finding blocks whose quoted text is not verbatim in the transcript,
     blank grade rows that cite unknown quotes. Returns (dropped_blocks, blanked_rows)."""
-    corpus = _norm_txt(speech_text); dropped = blanked = 0
+    corpus = _norm_txt(speech_text); dropped = blanked = dupes = 0; seen_global = {}
+    def _tn(b):
+        h3 = re.search(r"<h3>(.*?)</h3>", b, re.S); t = re.sub(r"^[A-Z]?\d*\s*·\s*", "", re.sub(r"<[^>]+>", "", h3.group(1) if h3 else "")).strip().lower()
+        return set(re.findall(r"\w+", t))
     def quote_ok(q):
         n = _norm_txt(q)
         if not n or n in ("nospeech", "notranscript", "noquote"):
             return True
         return (not no_speech) and len(n) >= 4 and n in corpus
-    seen = set()                                                         # shared across tiers: the same moment must not appear as P1 and again as P2
     for key in ("FINDINGS_P0", "FINDINGS_P1", "DELIGHTERS", "FINDINGS_P2"):
         v = mapping.get(key) or ""
+        if not isinstance(v, str):
+            continue
         blocks = re.findall(r'<div class="finding">.*?</div>\s*</div>', v, re.S)
         if not blocks:
             continue
-        keep = []
+        keep, seen = [], set()
         for b in blocks:
             quotes = re.findall(r'<span class="ar">(.*?)</span>', b, re.S)
             if not all(quote_ok(q) for q in quotes):
-                continue
-            sig = (_norm_txt(" ".join(quotes)), (re.search(r"\[\d+:\d\d\]", b) or [""])[0])
-            if sig in seen:                       # the model sometimes returns the same finding twice under two titles
-                continue
-            seen.add(sig); keep.append(b)
+                dropped += 1; continue
+            sig = (_norm_txt(" ".join(quotes)), (re.search(r"\[\d+:\d\d\]", b) or [""])[0]); words = _tn(b)
+            if sig in seen:                       # same tier, same quote+moment: the model returned one finding twice
+                dupes += 1; continue
+            prev = seen_global.get(sig)           # other tier: only a duplicate when the titles also overlap (distinct findings may share an anchor quote)
+            if prev is not None and words and (len(words & prev) / max(1, len(words | prev)) >= 0.5 or words <= prev or prev <= words):
+                dupes += 1; continue
+            seen.add(sig); seen_global.setdefault(sig, words); keep.append(b)
         prefix = {"FINDINGS_P0": "C", "FINDINGS_P1": "H", "FINDINGS_P2": "N", "DELIGHTERS": "D"}[key]
         keep = [re.sub(r"<h3>\s*(?:ID|[A-Z]\d*)?\s*·", f"<h3>{prefix}{i+1} ·", b, count=1) for i, b in enumerate(keep)]   # sequential IDs, no literal "ID"
-        dropped += len(blocks) - len(keep)
         mapping[key] = "\n".join(keep) if keep else "<p>No evidence for this tier in this session.</p>"
     for key in list(mapping):                                           # finding blocks only belong in the four finding placeholders
         if key not in ("FINDINGS_P0", "FINDINGS_P1", "FINDINGS_P2", "DELIGHTERS") and isinstance(mapping[key], str) and '<div class="finding">' in mapping[key]:
             mapping[key] = re.sub(r'<div class="finding">.*?</div>\s*</div>', "", mapping[key], flags=re.S).strip() or "no evidence"
-    rows = re.findall(r"<tr>.*?</tr>", mapping.get("GRADE_TABLE") or "", re.S); out = []; cited = set()
+    rows = re.findall(r"<tr>.*?</tr>", mapping.get("GRADE_TABLE") or "", re.S) if isinstance(mapping.get("GRADE_TABLE"), str) else []; out = []; cited = {}
     for r in rows:
         cells = re.findall(r"<td>(.*?)</td>", r, re.S)
         quotes = re.findall(r'[\"“](.{4,}?)[\"”]', re.sub(r"<[^>]+>", "", r))
         stamp = (re.search(r"\[\d+:\d\d\]", r) or [""])[0]
         bad = len(cells) >= 3 and quotes and not all(quote_ok(q) for q in quotes)
-        lazy = len(cells) >= 3 and stamp and stamp in cited and (cells[1].strip().lower() == "no evidence")   # same moment pasted into every row
+        lazy = len(cells) >= 3 and stamp and cited.get(stamp, 0) >= 2            # the same moment pasted into a third, fourth… row
         if bad or lazy:
             r = f"<tr><td>{cells[0]}</td><td>no evidence</td><td>no evidence</td></tr>"; blanked += 1
         elif stamp:
-            cited.add(stamp)
+            cited[stamp] = cited.get(stamp, 0) + 1
         out.append(r)
     if rows:
         mapping["GRADE_TABLE"] = "\n".join(out)
-    return dropped, blanked
+    # LLM rows must match the scaffold's column count (ragged tables otherwise)
+    for key, ncol in dict(GRADE_TABLE=3, ROADMAP_ROWS=5, ACTION_LIST_ROWS=5, PLACEMENT_TABLE=4, PER_NEED_MAP=5).items():
+        v = mapping.get(key)
+        if not isinstance(v, str) or "<tr" not in v:
+            continue
+        fixed = []
+        for r in re.findall(r"<tr>.*?</tr>", v, re.S):
+            cells = re.findall(r"<td[^>]*>(.*?)</td>", r, re.S)
+            if len(cells) == ncol or not cells:
+                fixed.append(r); continue
+            cells = cells[:ncol - 1] + [" · ".join(cells[ncol - 1:])] if len(cells) > ncol else cells + [""] * (ncol - len(cells))
+            fixed.append("<tr>" + "".join(f"<td>{c}</td>" for c in cells) + "</tr>")
+        mapping[key] = "\n".join(fixed)
+    return dropped + dupes, blanked
 
 
 THIN_EVIDENCE = ('<div class="caveat"><b>Thin evidence.</b> The participant did not speak and made no task clicks in this session, so the findings '
@@ -566,7 +595,7 @@ def stage_fill(job):
                 prompt = (TRANSLATE_RULES + f"\nPLACEHOLDERS (return all {len(gnames)} keys): {json.dumps(gnames)}\n{extra}\n")
             else:
                 prompt = (FILL_RULES_LOCAL + f"\n\nWORDING TIER: {tier}{" — this session is click-validated: write firm columns/halves and do NOT use the words estimated or unvalidated anywhere" if tier == "regions" else ""}\nPLACEHOLDERS (return all {len(gnames)} keys): {json.dumps(gnames)}\n{extra}\n\n" + pack)
-            cap = CAPS.get(gname, 1500)
+            cap = CAPS.get(gname, 2000)
             open(os.path.join(A, f"fill-prompt-{gname}.txt"), "w", encoding="utf-8").write(prompt)
             got = {}
             for attempt in (1, 2):
@@ -614,18 +643,20 @@ def stage_fill(job):
     except Exception:  # noqa: BLE001
         RD = {}
     speech_text = " ".join(a.get("speech", "") for a in (RD.get("appendix") or []) if a.get("speech") and a["speech"] != "(no transcript)")
-    no_speech = "no_speech" in (RD.get("flags") or []) or not speech_text.strip()
+    speech_text += " " + read(os.path.join(A, "transcript.srt"))            # Claude quotes the raw SRT: the corpus must contain it too
+    flags_ = RD.get("flags") or []
+    no_speech = ("no_speech" in flags_ or not speech_text.strip()) and not any(f in ("transcript_missing", "whisper_failed") for f in flags_)
     dropped, blanked = verify_findings(mapping, speech_text, no_speech)
     if tier == "regions":                                               # validated session: the model must not hedge with the weaker tiers' wording
         for k_, v_ in mapping.items():
             if isinstance(v_, str):
-                mapping[k_] = re.sub(r"\s*\(?estimated\)?\s*\(unvalidated\)|\bestimated \(unvalidated\)\b|\bunvalidated\b", "", v_)
+                mapping[k_] = re.sub(r"\s*estimated \(unvalidated\)|\s*\(unvalidated\)", "", v_)      # only the hedge phrases, never the bare word
     elif tier == "likely":
         for k_, v_ in mapping.items():
             if isinstance(v_, str):
                 mapping[k_] = v_.replace("estimated (unvalidated)", "likely")
     if dropped or blanked:
-        msg = f"verifier: removed {dropped} finding(s) with quotes not in the transcript, blanked {blanked} grade row(s)"
+        msg = f"verifier: removed {dropped} finding block(s) (quote not in transcript, or duplicate), blanked {blanked} grade row(s)"
         logj(job, msg); job.setdefault("warnings", []).append(msg)
     filled = re.sub(r"\{\{([A-Z_0-9]+)\}\}", lambda mm: str(mapping.get(mm.group(1), "")), html)
     if no_speech and int((RD.get("stats") or {}).get("clicks") or 0) == 0:

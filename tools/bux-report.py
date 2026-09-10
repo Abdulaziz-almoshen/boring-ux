@@ -49,7 +49,7 @@ code{background:#eef1f6;padding:1px 5px;border-radius:4px;font-size:12.5px}
 @media print{body{padding:0}h2,h3{page-break-after:avoid}tr{page-break-inside:avoid}.finding{page-break-inside:avoid}}
 """
 COL_COLOR = {"L": "#e8871e", "C": "#4f8cff", "R": "#0a9d54", None: "#cbd2df", "": "#cbd2df", "?": "#cbd2df"}
-MOMENT_COLOR = {"SEARCHING": "#e8871e", "CONFUSION": "#d33", "FRUSTRATION": "#8b0000", "LOOK_AWAY": "#9aa3b5", "CAMERA_FROZEN": "#5b6b8c", "FOUND_THEN_ACTED": "#0a9d54", "MISS_THEN_CORRECT": "#b06f00"}
+MOMENT_COLOR = {"SEARCHING": "#e8871e", "CONFUSION": "#d33", "FRUSTRATION": "#8b0000", "LOOK_AWAY": "#9aa3b5", "CAMERA_FROZEN": "#5b6b8c", "DEAD_CLICKS": "#c0392b", "FOUND_THEN_ACTED": "#0a9d54", "MISS_THEN_CORRECT": "#b06f00"}
 TIER_WORDS = {"regions": "gaze regions are validated for this session (click-consistency lift ≥ 0.5) — column and half statements may be made firmly, 3×3 cells with 'probably'",
               "likely": "gaze regions are partially validated (lift 0.25–0.5) — use 'likely' for columns; avoid specific-cell claims",
               "unvalidated": "gaze regions are NOT validated for this session — every gaze statement must read 'estimated (unvalidated)'; lean on mouse, clicks, transcript, and looking-away/keyboard events"}
@@ -85,6 +85,12 @@ def collapse_repeats(text):
             out.append(q.strip())
         prev = n
     return " ".join(out) if out else (text or "").strip()
+
+
+def cut(t, n=80):
+    """Cut at a word boundary with an ellipsis instead of mid-word."""
+    t = (t or "").strip()
+    return t if len(t) <= n else (t[:n].rsplit(" ", 1)[0] + "…")
 
 
 def click_summary(cl, sep="; "):
@@ -213,15 +219,15 @@ def build(session, product):
             gap = segs[i]["start"] - segs[i - 1]["end"]
             if gap >= 4:
                 w = [r for r in rows if segs[i - 1]["end"] <= f(r["t_s"]) <= segs[i]["start"]]
-                lat.append(dict(t=segs[i - 1]["end"], gap=gap, eyes=eyes_summary(w), next=segs[i]["text"][:80]))
+                lat.append(dict(t=segs[i - 1]["end"], gap=gap, eyes=eyes_summary(w), next=cut(segs[i]["text"], 80)))
     for m in M:
         if m["type"] in ("LOOK_AWAY", "CAMERA_FROZEN", "SEARCHING", "CONFUSION"):
-            lat.append(dict(t=m["t_start_ms"] / 1000, gap=(m["t_end_ms"] - m["t_start_ms"]) / 1000, eyes=f'{m["type"].replace("_", " ").lower()}: ' + ", ".join(f"{k} {v:.0%}" for k, v in m.get("gaze_dwell", {}).items()), next=m.get("transcript", "")[:80]))
+            lat.append(dict(t=m["t_start_ms"] / 1000, gap=(m["t_end_ms"] - m["t_start_ms"]) / 1000, eyes=m["type"].replace("_", " ").lower() + ((": " + ", ".join(f"{k} {v:.0%}" for k, v in sorted(m.get("gaze_dwell", {}).items(), key=lambda kv: -kv[1])[:3])) if m.get("gaze_dwell") else ""), next=m.get("transcript", "")[:80]))
     lat.sort(key=lambda x: x["t"])
 
     # ---- intent tables from moments ----
     intent = []
-    for typ in ("SEARCHING", "CONFUSION", "FOUND_THEN_ACTED", "MISS_THEN_CORRECT", "FRUSTRATION", "LOOK_AWAY", "CAMERA_FROZEN"):
+    for typ in ("SEARCHING", "CONFUSION", "FOUND_THEN_ACTED", "MISS_THEN_CORRECT", "FRUSTRATION", "DEAD_CLICKS", "LOOK_AWAY", "CAMERA_FROZEN"):
         ms = [m for m in M if m["type"] == typ]
         if not ms:
             continue
@@ -333,7 +339,7 @@ def render(D, rows, M, Q, product, appendix, segs):
     o.append("</table><h3>Where to place actions, data &amp; filters</h3><table><tr><th>When the user wants to…</th><th>Their eyes concentrate…</th><th>Behaviour</th><th>So place it…</th></tr>{{PLACEMENT_TABLE}}</table>"
              "<h3>Per-need map — where they looked for each thing</h3><table><tr><th>Need</th><th>Intent</th><th>Where the eyes went</th><th>Verdict</th><th>Fix</th></tr>{{PER_NEED_MAP}}</table>")
     # appendix
-    o.append(f"<h2>Appendix — complete fused timeline ({'every transcript segment' if segs else 'every 5 s — no transcript'})</h2><table><tr><th>#</th><th>Time</th><th>Gap</th><th>Speech (verbatim)</th><th>English</th><th>Eyes</th><th>On</th><th>Mouse</th></tr>")
+    o.append(f"<h2>Appendix — complete fused timeline ({'every transcript segment' if segs else 'every 5 s — no transcript'})</h2><table><tr><th>#</th><th>Time</th><th>Gap</th><th>Speech (as transcribed)</th><th>English</th><th>Eyes</th><th>On</th><th>Mouse</th></tr>")
     for a in appendix:
         sp = f"<span class='ar'>{esc(a['speech'])}</span>" if a["ar"] else esc(a["speech"])
         en = f"{{{{APPENDIX_ENGLISH_{a['n']}}}}}" if a["ar"] else ""

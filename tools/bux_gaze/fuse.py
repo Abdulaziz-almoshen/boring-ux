@@ -211,12 +211,20 @@ def load_session_files(session):
         except ValueError:
             return None
     clicks = []
-    PANEL = re.compile(r"^\s*(■\s*Stop|● Start|Enable camera|Calibrate|👀 Sign self-test|show gaze dot|on$|⏸|Pause|Resume|Open report|Camera on|👁 Show camera|🙈 Hide camera)", re.I)
+    # Older recordings logged clicks on the Boring UX panel itself. Match the panel's EXACT labels only (a real site may have a
+    # "Pause" button); the bare "on" (the gaze-dot checkbox) counts only next to another panel click.
+    PANEL_LABELS = {"■ stop & save", "● start", "enable camera", "starting…", "camera on ✓", "calibrate gaze", "👀 sign self-test (8 s)",
+                    "show gaze dot (hide for participant)", "⏸ pause", "▶ resume", "open report", "👁 show camera preview", "🙈 hide camera preview", "retry"}
+    lab = lambda e: re.sub(r"\s+", " ", (e.get("detail") or e.get("txt") or "")).strip().lower()
+    panel_t = [float(e["t_ms"]) for e in (events or []) if e.get("type") == "click" and lab(e) in PANEL_LABELS]
+    def is_panel(e):
+        l = lab(e)
+        return l in PANEL_LABELS or (l == "on" and any(abs(float(e["t_ms"]) - t) <= 1500 for t in panel_t))
     for e in (events or []):
         if e.get("type") != "click":
             continue
-        if PANEL.match(e.get("detail") or e.get("txt") or ""):
-            continue                                     # older recordings logged clicks on the Boring UX panel itself
+        if is_panel(e):
+            continue
         clickable = str(e.get("clickable", "")).strip().lower()
         rect = [float(x) for x in str(e.get("rect", "")).split()] if e.get("rect") else None
         clicks.append(dict(t_ms=float(e["t_ms"]), x=num(e.get("x")), y=num(e.get("y")), text=(e.get("detail") or e.get("txt") or "")[:60],
@@ -237,7 +245,7 @@ def load_transcript(session, out_dir):
 
 def collapse_repeats(text):
     """Whisper repeats a stuttered clause ("وش هذه الكلمة ما عرفتها؟" ×3): keep one copy of consecutive duplicate clauses."""
-    parts = re.split(r"(?<=[،,؟?.!])\s*", text or "")
+    parts = re.split(r"(?<=[،,؟?.!؛…])\s*", text or "")
     out, prev = [], None
     for p in parts:
         n = re.sub(r"[\s\W]+", "", p).lower()
@@ -438,7 +446,7 @@ def per_second(rows, mouse, clicks, rage, thrash, pages, transcript, vp, dur_s, 
         rec["page_changed"] = int(any(sec * 1000 <= p["t_ms"] < sec * 1000 + 1000 for p in pages[1:]))
         # speech
         txt = " ".join(dict.fromkeys(speech.get(sec, [])))
-        rec["speech_text"] = txt; rec["speaking"] = int(bool(txt)); rec["speech_segs"] = list(dict.fromkeys(speech.get(sec, [])))
+        rec["speech_text"] = txt; rec["speaking"] = int(bool(txt)); rec["speech_segs"] = list(dict.fromkeys(speech.get(sec, []))); rec["speech_segs_txt"] = " ¦ ".join(rec["speech_segs"])
         silence_run = 0 if txt else silence_run + 1
         rec["silence_run_s"] = silence_run
         cues = []
@@ -536,7 +544,7 @@ def detect_moments(secs, clicks, vp):
         nonlocal mid; mid += 1
         w = [s for s in secs if a <= s["t_s"] <= b]
         grades = [s["quality_grade"] for s in w]; worst = "F" if "F" in grades else "C" if "C" in grades else "B" if "B" in grades else "A"
-        if worst == "F" and kind not in ("LOOK_AWAY", "CAMERA_FROZEN"):
+        if worst == "F" and kind not in ("LOOK_AWAY", "CAMERA_FROZEN", "DEAD_CLICKS"):
             return
         dwell = Counter(s["gaze_cell"] for s in w if s.get("gaze_cell") and s["gaze_cell"] != "uncertain")
         tot = sum(dwell.values()) or 1
@@ -573,7 +581,7 @@ def detect_moments(secs, clicks, vp):
         elif k + 1 < len(clicks) and clicks[k + 1]["t_ms"] - c["t_ms"] <= 3000:
             dcell = Counter(s.get("gaze_cell") for s in secs if cs - 2 <= s["t_s"] <= cs and s.get("gaze_cell") not in (None, "uncertain")).most_common(1)
             ncell = vp.cell(clicks[k + 1]["x"], clicks[k + 1]["y"])[2]
-            if dcell and dcell[0][0] != ccell and dcell[0][0] == ncell:
+            if dcell and dcell[0][0] != ccell and dcell[0][0] == ncell and not clicks[k + 1]["dead"]:   # a dead "correction" is not a correction
                 add("MISS_THEN_CORRECT", cs, int(clicks[k + 1]["t_ms"] // 1000), 0.6 + (0.2 if c["dead"] else 0),
                     [dict(signal="dwell_cell", value=dcell[0][0]), dict(signal="first_click_cell", value=ccell), dict(signal="second_click_cell", value=ncell)])
     # LOOK-AWAY
@@ -597,7 +605,7 @@ def detect_moments(secs, clicks, vp):
             j = i
             while j + 1 < n and secs[j + 1].get("tab_hidden"):
                 j += 1
-            add("CAMERA_FROZEN", i, j, 0.8, [dict(signal="no_video_frames", duration_s=j - i + 1)], dict(subtype="camera frozen: tab hidden or app switch"))
+            add("CAMERA_FROZEN", i, j, 0.8, [dict(signal="no_video_frames", duration_s=j - i + 1)], dict(subtype="no camera frames (tab hidden, app switch or recorder stall)"))
             i = j + 1
         else:
             i += 1
@@ -626,12 +634,25 @@ def detect_moments(secs, clicks, vp):
         ch = sum([beh, fac, verb])
         if ch >= 2 and not any(m["type"] == "FRUSTRATION" and abs(m["t_start_ms"] - i * 1000) < 5000 for m in M):
             add("FRUSTRATION", max(0, i - 2), min(n - 1, i + 2), 0.5 + 0.25 * (ch - 2), [dict(signal="channels", value=dict(behavioural=beh, facial=fac, verbal=verb))])
+    # DEAD-CLICKS: bursts of dead / rage clicks on one target are hard evidence in their own right (they no longer count as "acted")
+    i = 0
+    while i < n:
+        dc = [c for c in secs[i]["clicks"] if c.get("is_dead") or c.get("is_rage")]
+        if dc:
+            j = i; label = dc[0].get("target_text") or "click"; cnt = 0
+            while j < n and (any(c.get("is_dead") or c.get("is_rage") for c in secs[j]["clicks"]) or (j + 1 < n and any(c.get("is_dead") or c.get("is_rage") for c in secs[j + 1]["clicks"]))):
+                cnt += sum(1 for c in secs[j]["clicks"] if c.get("is_dead") or c.get("is_rage")); j += 1
+            j = max(i, j - 1)
+            add("DEAD_CLICKS", i, j, min(1.0, 0.4 + 0.1 * cnt), [dict(signal="dead_or_rage_clicks", value=cnt, target=label)], dict(subtype=f"{label} ×{cnt}"))
+            i = j + 1
+        else:
+            i += 1
     M.sort(key=lambda m: m["t_start_ms"])
     # merge same-type moments whose windows overlap or touch (rage clicks otherwise emit one moment per click)
     M.sort(key=lambda m: (m["t_start_ms"], m["type"]))
     merged = []; last_of = {}
     for m in M:
-        last = last_of.get(m["type"])                      # merge against the previous moment of the SAME type
+        last = last_of.get((m["type"], m.get("subtype")))  # merge against the previous moment of the SAME type and subtype
         if last and m["t_start_ms"] <= last["t_end_ms"] + 1000:
             last["t_end_ms"] = max(last["t_end_ms"], m["t_end_ms"]); last["score"] = max(last["score"], m["score"])
             seen_t = {c.get("t_ms") for c in last["clicks"]}
@@ -642,7 +663,7 @@ def detect_moments(secs, clicks, vp):
             dwell = Counter(x["gaze_cell"] for x in w if x.get("gaze_cell") and x["gaze_cell"] != "uncertain"); tot = sum(dwell.values()) or 1
             last["gaze_dwell"] = {k: round(v / tot, 2) for k, v in dwell.items()}
             continue
-        merged.append(m); last_of[m["type"]] = m
+        merged.append(m); last_of[(m["type"], m.get("subtype"))] = m
     for k, m in enumerate(merged, 1):
         m["id"] = k
     return merged

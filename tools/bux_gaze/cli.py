@@ -31,12 +31,16 @@ def transcribe(session, out_dir, model_path, lang):
         have = None
     if os.path.exists(srt) and have == want:
         return srt, []          # same whisper settings → reuse; otherwise re-transcribe (an old file may predate the VAD fix)
+    for stale in (srt, meta_p):
+        if os.path.exists(stale):
+            os.remove(stale)    # never fall back to a stale transcript if whisper fails below
     audio = os.path.join(session, "audio.webm")
     if not os.path.exists(audio):
         return None, ["transcript_missing"]
     if not model_path:
         from .models import MODELS as _MODELS
         cands = glob.glob(os.path.join(_MODELS, "ggml-*.bin")) + glob.glob(os.path.expanduser("~/.cache/whisper*/ggml-*.bin"))
+        cands = [c for c in cands if "silero" not in c]
         cands = [c for c in cands if "tiny" not in c or len(cands) == 1]
         model_path = cands[0] if cands else None
     if not model_path or not os.path.exists(model_path):
@@ -188,7 +192,7 @@ def run(args):
     cols1 = ["t_s", "face_present", "gaze_h_deg", "gaze_v_deg", "gaze_h_sd", "gaze_x_vp", "gaze_y_vp", "gaze_col", "gaze_row", "gaze_cell", "gaze_state", "gaze_p_cell", "gaze_conf",
              "region_switches", "distinct_cells", "blink_count", "blink_rate_per_min", "head_yaw_deg", "head_pitch_deg", "distance_cm",
              "mouse_x", "mouse_y", "mouse_cell", "mouse_speed_px_s", "mouse_path_px", "mouse_idle", "dist_gaze_mouse_px", "clicks", "scroll_thrash", "page_url", "page_changed",
-             "speech_text", "speaking", "silence_run_s", "speech_cues",
+             "speech_text", "speech_segs_txt", "speaking", "silence_run_s", "speech_cues",
              "expr_browDown", "expr_browInnerUp", "expr_eyeSquint", "expr_eyeWide", "expr_mouthPress", "expr_mouthSmile", "expr_mouthFrown", "expr_jawOpen",
              "expr_browDown_z", "expr_eyeSquint_z", "expr_mouthPress_z", "expr_mouthSmile_z", "expr_label", "quality_score", "quality_grade", "flags"]
     F.write_csv(os.path.join(out_dir, "gaze-ai.csv"), secs, cols1)
@@ -198,7 +202,7 @@ def run(args):
     quality = dict(version=VERSION, session=os.path.basename(session), duration_s=round(dur_s, 1), display=disp, viewport=dict(w=vp.inner_w, h=vp.inner_h),
                    f_px=round(f_px, 1), ear_blink_threshold=round(ear_thr, 3), frames=dict(mediapipe=len(rows), l2cs=len(crops), face_present_frac=round(float(np.mean([r.get("face", 0) for r in rows])), 3), pts_gaps_over_200ms=len(gaps), timing=plan),
                    signs=signs, calibration=calib, click_consistency=cc, grade_histogram=grades, gaze_usable_frac=round(usable, 3),
-                   moments=dict((t, sum(1 for m in moments if m["type"] == t)) for t in ("SEARCHING", "FOUND_THEN_ACTED", "MISS_THEN_CORRECT", "LOOK_AWAY", "CAMERA_FROZEN", "CONFUSION", "FRUSTRATION")),
+                   moments=dict((t, sum(1 for m in moments if m["type"] == t)) for t in ("SEARCHING", "FOUND_THEN_ACTED", "MISS_THEN_CORRECT", "LOOK_AWAY", "CAMERA_FROZEN", "DEAD_CLICKS", "CONFUSION", "FRUSTRATION")),
                    flags=sorted(set(flags)), params=vars(args),
                    footer="Uncalibrated webcam gaze (L2CS-Net, Gaze360): typical error ≈10° ≈8 cm at 55 cm; a 3×3 cell is about one error radius. Column (L/C/R) statements are right roughly 7 in 10; specific cells about half the time; looking-away and keyboard glances are reliable.")
     json.dump(quality, open(os.path.join(out_dir, "quality.json"), "w"), ensure_ascii=False, indent=1)

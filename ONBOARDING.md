@@ -23,7 +23,7 @@ Set up Boring UX (open-source webcam eye-tracking usability testing) on this Mac
    b) Do a 30-second test: open any website, click the Boring UX icon, Enable camera (allow the camera prompt),
       Calibrate, Start, press "Sign self-test", talk for a few seconds, click "Stop & save".
    After Stop, the panel should switch to a processing view and the report should open automatically when done.
-6. If anything fails, read docs/ and tools/ in the repo to diagnose, fix it, and re-verify. Finish by telling me,
+6. If anything fails, read tools/ (and its comments) to diagnose, fix it, and re-verify. Finish by telling me,
    in plain language, how to run a real usability session and where reports are saved.
 Note: the service runs a staged copy of the repo's tools from ~/.boring-ux/app (macOS blocks background services from
 reading ~/Desktop). Whenever the repo is updated (git pull), re-run: bash tools/install-daemon.sh

@@ -64,4 +64,4 @@ you supply the judgment inside a fixed scaffold.
 Use the SEARCHING/FOUND-THEN-ACTED moments' `gaze_dwell` for the window before the relevant click, compare with the
 session baseline dwell for that cell/column (report-data `stats.gaze_cells`), and report per the design's template
 (likelihood ratio + column/cell + confidence), e.g. "During the 7 s before clicking *Submit*, 61 % of confident gaze was in
-the right column (session baseline 38 %) — likely searching on the right; top-right unconfirmed." See docs/GAZE-FROM-VIDEO-DESIGN.md §6.
+the right column (session baseline 38 %) — likely searching on the right; top-right unconfirmed." See the gaze-from-video design (git history: docs/GAZE-FROM-VIDEO-DESIGN.md @ 3d2a791) §6.

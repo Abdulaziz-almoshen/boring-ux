@@ -1,5 +1,5 @@
 """Ingest, per-frame extraction, screen mapping, 10 Hz/1 Hz fusion, quality, click-consistency, UX moments.
-Implements docs/GAZE-FROM-VIDEO-DESIGN.md §3–§7 (pragmatic first version; thresholds are the design's starting points).
+Implements the gaze-from-video design (git history: docs/GAZE-FROM-VIDEO-DESIGN.md @ 3d2a791) §3–§7 (pragmatic first version; thresholds are the design's starting points).
 """
 import csv
 import json

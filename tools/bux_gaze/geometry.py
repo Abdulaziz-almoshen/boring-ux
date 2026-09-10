@@ -1,6 +1,6 @@
 """Coordinate frames, display/camera profiles, angle<->screen mapping, bias correction.
 
-Conventions (docs/GAZE-FROM-VIDEO-DESIGN.md §2, all CONFIRMED):
+Conventions (the gaze-from-video design (git history: docs/GAZE-FROM-VIDEO-DESIGN.md @ 3d2a791) §2, all CONFIRMED):
   h = horizontal gaze angle, + = participant's own RIGHT  (screen +x). No flip needed for L2CS.
   v = vertical gaze angle,   + = UP.                       Zero = eye->lens ray.
   E_C = eye midpoint in OpenCV camera frame (X right = image right, Y down, Z toward participant).

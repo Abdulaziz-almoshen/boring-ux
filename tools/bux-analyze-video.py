@@ -2,7 +2,7 @@
 """
 bux-analyze-video — offline AI post-processing of a Boring UX session's face.webm.
 
-Implements docs/GAZE-FROM-VIDEO-DESIGN.md: MediaPipe (face, blink, head pose, blendshapes) +
+Implements the gaze-from-video design (git history: docs/GAZE-FROM-VIDEO-DESIGN.md @ 3d2a791): MediaPipe (face, blink, head pose, blendshapes) +
 L2CS-Net gaze (heads bound by name, flip self-test), calibration-free angle→screen mapping
 with click-based bias correction, 10 Hz region states, per-second fusion with mouse/clicks/
 transcript, UX moments, quality grades and click-consistency gating.

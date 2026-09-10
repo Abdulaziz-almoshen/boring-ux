@@ -1,4 +1,4 @@
-"""bux-analyze-video: orchestrates docs/GAZE-FROM-VIDEO-DESIGN.md §8.3 and writes <session>/analysis/."""
+"""bux-analyze-video: orchestrates the gaze-from-video design (git history: docs/GAZE-FROM-VIDEO-DESIGN.md @ 3d2a791) §8.3 and writes <session>/analysis/."""
 import argparse
 import glob
 import json

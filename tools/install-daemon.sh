@@ -22,7 +22,7 @@ fi
 # Re-run this installer after updating the repo (git pull) to refresh the copy.
 APP="$AI/app"; mkdir -p "$APP"
 rsync -a --delete --exclude '__pycache__' --exclude '*.pyc' "$REPO/tools/" "$APP/tools/"
-cp -f "$REPO/docs/GAZE-FROM-VIDEO-DESIGN.md" "$APP/" 2>/dev/null || true
+cp -f "$REPO/the gaze-from-video design (git history: docs/GAZE-FROM-VIDEO-DESIGN.md @ 3d2a791)" "$APP/" 2>/dev/null || true
 echo "  staged tools → $APP/tools"
 
 cat > "$PLIST" <<EOF

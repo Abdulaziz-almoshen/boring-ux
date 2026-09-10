@@ -535,6 +535,57 @@ def detect_moments(secs, clicks, vp):
     return M
 
 
+# ---------------- sign self-test (§7.1) ----------------
+def selftest_intervals(events):
+    """From `selftest` events (detail = LEFT/RIGHT/TOP/BOTTOM/END) → {phase: (t_start_ms, t_end_ms)}."""
+    ev = [(float(e["t_ms"]), (e.get("detail") or e.get("txt") or "").strip().upper()) for e in (events or []) if e.get("type") == "selftest"]
+    ev.sort()
+    out = {}
+    for i, (t, ph) in enumerate(ev):
+        if ph in ("LEFT", "RIGHT", "TOP", "BOTTOM"):
+            t_end = ev[i + 1][0] if i + 1 < len(ev) else t + 2000
+            out[ph] = (t, t_end)
+    return out
+
+
+def evaluate_selftest(rows, intervals):
+    """PASS if median_h(RIGHT)−median_h(LEFT) > +8° and > 2× pooled within-interval SD; vertical: median_v(TOP)−median_v(BOTTOM) > +8°.
+    Also checks MediaPipe iris_right and head-yaw co-rotation. First 500 ms of each interval dropped; medians, not means."""
+    if not intervals or not all(k in intervals for k in ("LEFT", "RIGHT")):
+        return None
+    fr = [r for r in rows if r.get("h") is not None]
+    if len(fr) < 10:
+        return dict(status="inconclusive", note="too few gaze frames")
+    medR = float(np.median([r["hR"] for r in fr])); medL = float(np.median([r["hL"] for r in fr]))
+    def sel(ph):
+        a, b = intervals[ph]
+        return [r for r in fr if a + 500 <= r["t_ms"] <= b]
+    def stats(ph):
+        s = sel(ph)
+        if len(s) < 3:
+            return None
+        return dict(n=len(s), h=float(np.median([math.degrees(r["h"]) for r in s])), h_sd=float(np.std([math.degrees(r["h"]) for r in s])),
+                    v=float(np.median([math.degrees(r["v"]) for r in s])),
+                    iris_right=float(np.median([-(((r["hR"] - medR) + (r["hL"] - medL)) / 2) for r in s])),
+                    head_yaw=float(np.median([math.degrees(r["head_yaw"]) for r in s])))
+    P = {ph: stats(ph) for ph in intervals}
+    out = dict(phases={k: ({kk: round(vv, 2) for kk, vv in v.items()} if v else None) for k, v in P.items()})
+    L, R = P.get("LEFT"), P.get("RIGHT")
+    if L and R:
+        dh = R["h"] - L["h"]; pooled = math.sqrt((L["h_sd"] ** 2 + R["h_sd"] ** 2) / 2)
+        out["horizontal"] = dict(delta_deg=round(dh, 1), pooled_sd=round(pooled, 1),
+                                 status="PASS" if (dh > 8 and dh > 2 * pooled) else "INVERTED" if dh < -8 else "WEAK",
+                                 iris_right_delta=round(R["iris_right"] - L["iris_right"], 3), iris_ok=(R["iris_right"] - L["iris_right"]) > 0.05,
+                                 head_corotates=R["head_yaw"] > L["head_yaw"])
+    T, B = P.get("TOP"), P.get("BOTTOM")
+    if T and B:
+        dv = T["v"] - B["v"]
+        out["vertical"] = dict(delta_deg=round(dv, 1), status="PASS" if dv > 8 else "INVERTED" if dv < -8 else "WEAK")
+    hs = out.get("horizontal", {}).get("status"); vs = out.get("vertical", {}).get("status")
+    out["status"] = "FAIL" if "INVERTED" in (hs, vs) else "PASS" if hs == "PASS" and vs in ("PASS", None) else "WEAK"
+    return out
+
+
 # ---------------- writers ----------------
 def write_csv(path, rows, cols):
     with open(path, "w", newline="", encoding="utf-8") as f:

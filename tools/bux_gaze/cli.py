@@ -121,6 +121,15 @@ def run(args):
         hs = [r["h"] for r in fr]; vs = [r["v"] for r in fr]
         c1 = float(np.corrcoef(hs, iris_right)[0, 1]); c2 = float(np.corrcoef(hs, [-r["H_bl"] for r in fr])[0, 1]); c3 = float(np.corrcoef(vs, [r["V_bl"] for r in fr])[0, 1])
         signs["cross_path"] = dict(corr_h_iris_right=round(c1, 2), corr_h_blend=round(c2, 2), corr_v_blend=round(c3, 2), status="ok" if (c1 > 0.3 and c2 > 0.3) else "weak")
+    # explicit LEFT/RIGHT/TOP/BOTTOM prompt, if the session recorded one (§7.1)
+    st = F.evaluate_selftest(rows, F.selftest_intervals(events))
+    if st:
+        signs["selftest"] = st
+        log(f"sign self-test (prompt): {st.get('status')} horizontal={st.get('horizontal')} vertical={st.get('vertical')}")
+        if st.get("status") == "FAIL":
+            flags.append("selftest_failed")
+            if st.get("horizontal", {}).get("status") == "INVERTED":
+                signs.setdefault("orientation", {})["status"] = "INVERTED"; signs["orientation"]["source"] = "selftest"
     if signs.get("orientation", {}).get("status") == "INVERTED":
         flags.append("orientation_inverted")
 

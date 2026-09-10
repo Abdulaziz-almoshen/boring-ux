@@ -43,6 +43,7 @@ panel.innerHTML = `<h4>😴 Boring UX <small>any-site</small></h4>
  <button id="bux-cal-btn" disabled>Calibrate gaze</button>
  <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#8a94a6;margin:4px 0"><input type="checkbox" id="bux-dot-toggle" checked> show gaze dot (hide for participant)</label>
  <button class="go" id="bux-start" disabled>● Start</button>
+ <button id="bux-selftest" disabled style="font-size:12px;padding:6px" title="8-second look LEFT/RIGHT/TOP/BOTTOM prompt — proves the left/right orientation of this session">👀 Sign self-test (8 s)</button>
  <button class="stop" id="bux-stop" disabled>■ Stop &amp; save</button>
  <div class="row"><span>Region</span><b id="bux-region">—</b></div>
  <div class="row"><span>Gaze</span><b id="bux-status">idle</b></div>
@@ -135,6 +136,30 @@ async function validate(){
   setHint("Calibrated ✓ accuracy ≈ "+(S.accuracyPx??"?")+"px. Press Start.");
 }
 
+/* ---------- sign self-test (design §7.1): LEFT 2s → RIGHT 2s → TOP 2s → BOTTOM 2s, logged as `selftest` events ---------- */
+function beep(){ try{ const A=new (window.AudioContext||window.webkitAudioContext)(); const o=A.createOscillator(), g=A.createGain();
+  o.frequency.value=880; g.gain.value=0.15; o.connect(g).connect(A.destination); o.start(); setTimeout(()=>{ try{o.stop(); A.close();}catch(_){} },90); }catch(_){} }
+$("bux-selftest").onclick = runSelfTest;
+async function runSelfTest(){
+  if(!S.recording){ alert("Start the recording first, then run the self-test."); return; }
+  $("bux-selftest").disabled=true;
+  const phases=[["LEFT","◀ Look at the LEFT edge","left:3vw;top:50vh"],["RIGHT","Look at the RIGHT edge ▶","right:3vw;top:50vh"],
+                ["TOP","▲ Look at the TOP edge","left:50vw;top:4vh"],["BOTTOM","Look at the BOTTOM edge ▼","left:50vw;bottom:4vh"]];
+  cal.style.cssText=CAL_CSS; cal.innerHTML="";
+  const msg=document.createElement("div"); msg.style.cssText="position:fixed;top:24px;left:0;right:0;text-align:center;font:15px -apple-system,Arial;color:#fff;z-index:2147483647";
+  msg.textContent="Sign self-test — follow the dot with your EYES (head can move too). 8 seconds."; cal.appendChild(msg);
+  const dot2=document.createElement("div"); cal.appendChild(dot2);
+  for(const [phase,label,pos] of phases){
+    dot2.style.cssText="position:fixed;transform:translate(-50%,-50%);width:44px;height:44px;border-radius:50%;background:#ff5470;border:4px solid #fff;box-shadow:0 0 24px #ff5470;z-index:2147483647;"+pos;
+    if(pos.startsWith("right")) dot2.style.transform="translate(50%,-50%)";
+    if(pos.includes("bottom")) dot2.style.transform="translate(-50%,50%)";
+    msg.textContent=label; beep(); ev({type:"selftest",txt:phase});
+    await sleep(2000);
+  }
+  ev({type:"selftest",txt:"END"}); cal.style.cssText="display:none"; cal.innerHTML="";
+  setHint("Self-test recorded ✓ (analysed offline: LEFT/RIGHT/TOP/BOTTOM medians prove the orientation).");
+}
+
 /* ---------- native capture (no snippet — we are the page) ---------- */
 function isClickable(el){ let n=el,d=0; while(n&&n.nodeType===1&&d<6){ if(/^(A|BUTTON|INPUT|SELECT|TEXTAREA|LABEL|SUMMARY|OPTION)$/.test(n.tagName))return true;
   if(n.getAttribute){ const r=n.getAttribute("role"); if(r&&/^(button|link|tab|checkbox|radio|menuitem|switch|option)$/.test(r))return true;
@@ -183,7 +208,7 @@ $("bux-start").onclick = async () => {
   announce();
   // lock the panel to recording state — Start/camera/calibrate off, only Stop is live
   $("bux-start").disabled=true; $("bux-cam").disabled=true; $("bux-cal-btn").disabled=true; $("bux-cam-view").disabled=true;
-  $("bux-stop").disabled=false; $("bux-status").textContent="REC ●";
+  $("bux-stop").disabled=false; $("bux-selftest").disabled=false; $("bux-status").textContent="REC ●";
   setHint("Recording… stay on this tab. Press Stop to save.");
 };
 $("bux-stop").onclick = stop;
@@ -225,7 +250,7 @@ async function stop(){
   S.chunks={face:[],audio:[],screen:[]};
   // 4) reset the panel to the initial state (must Enable camera again for a new session)
   $("bux-cam").disabled=false; $("bux-cam").textContent="Enable camera";
-  $("bux-cal-btn").disabled=true; $("bux-cam-view").disabled=true; $("bux-start").disabled=true; $("bux-stop").disabled=true;
+  $("bux-cal-btn").disabled=true; $("bux-cam-view").disabled=true; $("bux-start").disabled=true; $("bux-stop").disabled=true; $("bux-selftest").disabled=true;
   $("bux-status").textContent="saved ✓ · idle"; $("bux-region").textContent="—";
   // 5) HONEST result: did the files really go into one folder, or did we fall back to loose files?
   const failed=results.filter(r=>r&&!r.ok);

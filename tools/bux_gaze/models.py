@@ -99,7 +99,7 @@ class FaceModel:
             n_faces=len(faces), bbox=(float(x0), float(y0), float(bw), float(bh)), u_e=u_e, v_e=v_e,
             ipd_px=ipd_px, iris_px=iris_px, ear=float((ear_R + ear_L) / 2), hR=float(hR), hL=float(hL),
             head_yaw=head_yaw, head_pitch=head_pitch, head_roll=head_roll, t_x=t_x, t_y=t_y, t_z=t_z,
-            bs=bs, H_bl=float(H_bl), V_bl=float(V_bl), crop224=crop224, padded_frac=padded_frac,
+            bs=bs, H_bl=float(H_bl), V_bl=float(V_bl), P=P, crop224=crop224, padded_frac=padded_frac,
             face_lum=float(gray.mean()), glare=float((eye_roi > 240).mean()), img_w=w, img_h=h)
 
     @staticmethod

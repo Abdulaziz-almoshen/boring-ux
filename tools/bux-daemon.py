@@ -41,8 +41,9 @@ PORT = int(os.environ.get("BUX_PORT", "7331"))
 CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 RATE = 0.30            # measured: analysis wall-clock ≈ 0.30 × video length on Apple Silicon (GPU)
 FILL_EST_S = 150       # typical claude fill time
-STAGES = [("analyze", "Analyzing eyes, face & expressions", 0.62), ("scaffold", "Building the report structure", 0.03),
-          ("fill", "Writing the findings (local model)", 0.28), ("pdf", "Rendering the PDF", 0.04), ("open", "Opening the report", 0.03)]
+STAGES = [("analyze", "Analyzing eyes, face & expressions", 0.52), ("screen", "Reading the screen recording", 0.12),
+          ("scaffold", "Building the report structure", 0.03), ("fill", "Writing the findings (local model)", 0.26),
+          ("pdf", "Rendering the PDF", 0.04), ("open", "Opening the report", 0.03)]
 for _d in (JOBS, LOGS, SESSIONS):
     os.makedirs(_d, exist_ok=True)
 
@@ -218,6 +219,16 @@ def stage_analyze(job):
     return "ok"
 
 
+def stage_screen(job):
+    """Ask a local vision model what was actually on screen where the participant clicked and looked.
+    Optional by design: a session without a screen recording, or a machine without a vision model, just skips it."""
+    ollama_unload()                                   # the writer model must not sit in memory next to the VLM
+    rc, tail = run_proc(job, [PY, os.path.join(REPO, "tools", "bux-screen-read.py"), job["folder"]])
+    if rc != 0:
+        job.setdefault("warnings", []).append("screen reading failed: " + " | ".join(tail[-2:])[:200])
+    return "ok"                                       # never fail the report over the visual pass
+
+
 def stage_scaffold(job):
     rc, tail = run_proc(job, [PY, os.path.join(REPO, "tools", "bux-report.py"), job["folder"], "--product", job.get("product") or os.path.basename(job["folder"])])
     if rc != 0:
@@ -387,7 +398,22 @@ def evidence_pack(A, max_transcript=14000, timeline_s=None):
         lines.append(f"{t//60:02d}:{t%60:02d} eyes={cells.most_common(1)[0][0] if cells else (states.most_common(1)[0][0] if states else '-')} on={on}/{len(w)} sw={sw}"
                      f" mouse={mouse.most_common(1)[0][0] if mouse else '-'}{' clicks='+'|'.join(clicks[:3]) if clicks else ''}{' expr='+expr.most_common(1)[0][0] if expr else ''} q={q.most_common(1)[0][0] if q else '-'}{' said: '+said if said else ''}")
     timeline = "\n".join(lines)
-    return f"=== computed data (JSON) ===\n{json.dumps(data, ensure_ascii=False)}\n\n=== transcript (verbatim, [m:ss] text) ===\n{tr}\n\n=== timeline, one line per 10 s (eyes=dominant 3x3 cell or state; on=seconds on-screen; sw=region switches; q=quality grade) ===\n{timeline}\n"
+    scr = rd("screens.json")
+    seen = []
+    for r in (scr.get("reads") or [])[:26]:
+        t = int(r.get("t_s") or 0); stamp = f"{t//60}:{t%60:02d}"; k = r.get("read") or {}
+        if r.get("kind") == "click":
+            seen.append(f"[{stamp}] CLICK landed on: {k.get('element_at_marker','?')} ({k.get('element_translation','')}) — "
+                        f"kind={k.get('element_kind','?')}, looks clickable={k.get('looks_clickable')}. Page: {k.get('screen_name','')}. "
+                        f"Near it: {', '.join(str(x) for x in (k.get('nearby_actions') or [])[:3])}")
+        elif r.get("kind") == "moment":
+            seen.append(f"[{stamp}] LOOKING AT ({r.get('cell','?')}): {str(k.get('region_translation') or k.get('region_contents',''))[:160]} "
+                        f"— most likely reading: {k.get('reading_target','?')}")
+        else:
+            seen.append(f"[{stamp}] SCREEN: {k.get('screen_name','?')} — {k.get('purpose','')} sections: "
+                        f"{', '.join(str(x) for x in (k.get('main_sections') or [])[:5])}. {k.get('notable') or ''}")
+    screen_block = ("\n\n=== what was on screen (read from the screen recording by a vision model) ===\n" + "\n".join(seen)) if seen else ""
+    return f"=== computed data (JSON) ===\n{json.dumps(data, ensure_ascii=False)}\n\n=== transcript (verbatim, [m:ss] text) ===\n{tr}\n\n{screen_block}\n\n=== timeline, one line per 10 s (eyes=dominant 3x3 cell or state; on=seconds on-screen; sw=region switches; q=quality grade) ===\n{timeline}\n"
 
 
 TRANSLATE_RULES = """Translate each numbered transcript line into natural English. Return ONE JSON object whose keys are EXACTLY the placeholder
@@ -409,6 +435,8 @@ FINDINGS_P0/FINDINGS_P1/FINDINGS_P2/DELIGHTERS = one or more blocks EXACTLY like
 RECOMMENDATION_i, LATENCY_MEANING_i, INTENT_READS_AS_i, JOURNEY_SUMMARY = one or two sentences. APPENDIX_ENGLISH_i = English translation of the
 given line i (plain text). GRADE_TABLE rows: AI & intelligence · Visual design · Data clarity · Delight · Task efficiency · Actionability · Discoverability
 (score /10 or 'no evidence', with the evidence).
+When "what was on screen" is present, NAME THE REAL ELEMENT the participant clicked or read (quote its visible label) instead of a grid cell,
+and say when a click landed on something that only looks like a control (kind=heading/text with looks clickable=false) — that is a real defect.
 HARD REQUIREMENTS (violations make the report unusable): (1) every GRADE_TABLE row's third cell contains either a verbatim quote with its [m:ss]
 or the exact words "no evidence"; a row with no evidence must score "no evidence", never a number. (2) In tier 'unvalidated', every sentence
 that mentions where the eyes were includes the words "estimated (unvalidated)". (3) No invented dates, sprints, or quarters in ROADMAP_ROWS —
@@ -700,7 +728,7 @@ def stage_open(job):
     return "ok"
 
 
-RUNNERS = {"analyze": stage_analyze, "scaffold": stage_scaffold, "fill": stage_fill, "pdf": stage_pdf, "open": stage_open}
+RUNNERS = {"analyze": stage_analyze, "screen": stage_screen, "scaffold": stage_scaffold, "fill": stage_fill, "pdf": stage_pdf, "open": stage_open}
 
 
 # ---------------- worker ----------------

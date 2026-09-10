@@ -186,7 +186,7 @@ function isClickable(el){ let n=el,d=0; while(n&&n.nodeType===1&&d<6){ if(/^(A|B
   try{ if(getComputedStyle(n).cursor==="pointer")return true; }catch(e){} n=n.parentElement; d++; } return false; }
 function ev(o){ if(S.recording){ o.t=Math.round(nowRel()); S.events.push(o); } }
 
-document.addEventListener("click",e=>{ if(!S.recording)return; const el=e.target||{}; if(el.closest&&el.closest("#bux-panel, #bux-cal, #bux-proc"))return;   // clicks on the Boring UX panel are moderator actions, not the task const clickable=isClickable(el);
+document.addEventListener("click",e=>{ if(!S.recording)return; const el=e.target||{}; if(el.closest&&el.closest("#bux-panel, #bux-cal, #bux-proc"))return; /* panel clicks are moderator actions, not the task */ const clickable=isClickable(el);
   let rect=null; try{ const b=(el.getBoundingClientRect?el:el.parentElement).getBoundingClientRect(); rect=[Math.round(b.left),Math.round(b.top),Math.round(b.width),Math.round(b.height)]; }catch(_){}
   ev({type:"click",x:e.clientX,y:e.clientY,tag:el.tagName||"",txt:(el.innerText||el.value||"").toString().trim().slice(0,60),clickable,rect,gazeRegion:S.lastRegion||"?"});
   try{ if(window.webgazer) webgazer.recordScreenPosition(e.clientX,e.clientY,"click"); }catch(_){}

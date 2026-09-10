@@ -205,6 +205,32 @@ def load_session_files(session):
         p = os.path.join(session, name)
         return list(csv.DictReader(open(p, encoding="utf-8"))) if os.path.exists(p) else None
     mouse = read("mouse.csv"); events = read("events.csv")
+    # Each tab has its own viewport. session.json lists them, so a click recorded in a 900-px-wide tab lands in the right
+    # third of the grid instead of being read against the panel tab's width.
+    scale = {}
+    try:
+        SJ = json.load(open(os.path.join(session, "session.json"), encoding="utf-8"))
+        vp0 = SJ.get("viewport") or {}
+        pw, ph = float(vp0.get("stageW") or 0), float(vp0.get("stageH") or 0)
+        for c in (SJ.get("contexts") or []):
+            vw, vh = float(c.get("vw") or 0), float(c.get("vh") or 0)
+            if vw and vh and pw and ph and (abs(vw - pw) > 1 or abs(vh - ph) > 1):
+                scale[str(c.get("tab"))] = (pw / vw, ph / vh)
+    except Exception:  # noqa: BLE001
+        pass
+    def fit(row):
+        f = scale.get(str(row.get("tab") or ""))
+        if not f:
+            return row
+        for k, m in (("x", f[0]), ("y", f[1])):
+            try:
+                row[k] = str(round(float(row[k]) * m))
+            except (TypeError, ValueError):
+                pass
+        return row
+    if scale:
+        mouse = [fit(dict(r)) for r in (mouse or [])] or mouse
+        events = [fit(dict(r)) for r in (events or [])] or events
     def num(v):
         try:
             return float(v) if v not in (None, "") else None
@@ -232,7 +258,12 @@ def load_session_files(session):
     # older recordings exported clicks without coordinates: they still count as clicks (timing) but cannot be placed
     rage = [float(e["t_ms"]) for e in (events or []) if e.get("type") == "rage_click"]
     thrash = [float(e["t_ms"]) for e in (events or []) if e.get("type") == "scroll_thrash"]
-    pages = [dict(t_ms=float(e["t_ms"]), url=e.get("extra") or e.get("url") or "", title=e.get("detail") or "") for e in (events or []) if e.get("type") == "page"]
+    # "page" is the tab's own load; "tab_switch"/"window_focus" mean the participant moved to a different page in another
+    # tab — both change what is on screen, so the timeline must follow them (multi-tab sessions, extension schema 2).
+    pages = [dict(t_ms=float(e["t_ms"]), url=e.get("url") or e.get("extra") or "", title=e.get("detail") or "")
+             for e in (events or []) if e.get("type") in ("page", "tab_switch", "window_focus") and (e.get("url") or e.get("extra"))]
+    pages.sort(key=lambda p_: p_["t_ms"])
+    pages = [p_ for i, p_ in enumerate(pages) if i == 0 or p_["url"] != pages[i - 1]["url"]]
     return S, mouse, events, clicks, rage, thrash, pages
 
 

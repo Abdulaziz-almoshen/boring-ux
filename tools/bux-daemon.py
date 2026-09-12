@@ -260,7 +260,7 @@ OLLAMA = os.environ.get("BUX_OLLAMA_URL", "http://127.0.0.1:11434")
 RAM_GB = round((os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")) / (1024 ** 3)) if hasattr(os, "sysconf") else 16
 BIG = ["gemma3:12b", "qwen3:14b", "qwen2.5:14b", "gemma3:27b", "qwen3:8b", "llama3.1:8b", "qwen2.5:7b"]
 SMALL = ["qwen3:8b", "gemma3:12b", "llama3.1:8b", "qwen2.5:7b", "qwen3:14b", "qwen2.5:14b"]
-PREFERRED = [os.environ.get("BUX_LLM_MODEL")] + (BIG if RAM_GB >= 32 else SMALL)
+PREFERRED = [m for m in [os.environ.get("BUX_LLM_MODEL")] + (BIG if RAM_GB >= 32 else SMALL) if m]
 OLLAMA_MODEL = PREFERRED[0]
 
 

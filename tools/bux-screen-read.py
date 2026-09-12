@@ -159,6 +159,47 @@ PROMPT_REGION = ("The ORANGE RECTANGLE marks the part of the screen a participan
 CELLS = {"TL": (0, 0), "TC": (1, 0), "TR": (2, 0), "ML": (0, 1), "MC": (1, 1), "MR": (2, 1), "BL": (0, 2), "BC": (1, 2), "BR": (2, 2)}
 
 
+def contact_sheet(reads, out_path, cols=2, tile_w=760):
+    """One image showing every frame the model looked at and the answer it gave — the quickest way to check it is right."""
+    import cv2  # noqa: PLC0415
+    import numpy as np  # noqa: PLC0415
+    tiles = []
+    for r in reads:
+        im = cv2.imread(r["_abs"]) if os.path.exists(r.get("_abs", "")) else None
+        if im is None:
+            continue
+        h = int(tile_w * im.shape[0] / im.shape[1])
+        im = cv2.resize(im, (tile_w, h), interpolation=cv2.INTER_AREA)
+        k = r.get("read") or {}
+        t = int(r.get("t_s") or 0)
+        if r["kind"] == "click":
+            lines = [f"{t//60}:{t%60:02d}  CLICK on: {k.get('element_at_marker','?')}",
+                     f"   kind={k.get('element_kind','?')}  looks clickable={k.get('looks_clickable')}  ({k.get('why','')})",
+                     f"   page: {k.get('screen_name','')}"]
+        elif r["kind"] == "moment":
+            lines = [f"{t//60}:{t%60:02d}  LOOKING AT cell {r.get('cell','-')} during {r.get('moment','')}",
+                     f"   reading: {str(k.get('reading_target') or k.get('screen_name',''))[:70]}",
+                     f"   {str(k.get('region_translation') or k.get('purpose',''))[:70]}"]
+        else:
+            lines = [f"{t//60}:{t%60:02d}  SCREEN: {k.get('screen_name','?')}",
+                     f"   {str(k.get('purpose',''))[:72]}",
+                     f"   {str(k.get('notable') or '')[:72]}"]
+        cap = np.zeros((26 * len(lines) + 14, tile_w, 3), np.uint8) + 22
+        for i, ln in enumerate(lines):
+            cv2.putText(cap, ln[:96], (10, 24 + i * 25), cv2.FONT_HERSHEY_SIMPLEX, 0.46,
+                        (90, 200, 255) if i == 0 else (215, 215, 215), 1, cv2.LINE_AA)
+        tiles.append(np.vstack([im, cap]))
+    if not tiles:
+        return
+    hmax = max(t.shape[0] for t in tiles)
+    tiles = [np.vstack([t, np.zeros((hmax - t.shape[0], t.shape[1], 3), np.uint8) + 22]) for t in tiles]
+    rows = [np.hstack(tiles[i:i + cols]) for i in range(0, len(tiles), cols)]
+    if len(rows) > 1 and rows[-1].shape[1] < rows[0].shape[1]:
+        pad = np.zeros((rows[-1].shape[0], rows[0].shape[1] - rows[-1].shape[1], 3), np.uint8) + 22
+        rows[-1] = np.hstack([rows[-1], pad])
+    cv2.imwrite(out_path, np.vstack(rows), [cv2.IMWRITE_JPEG_QUALITY, 82])
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("session")
@@ -276,12 +317,19 @@ def main():
             continue
         rec = dict(s_)
         rec["read"] = r
-        rec["image"] = os.path.relpath(jpg, sess)
+        rec["image"] = os.path.relpath(jpg, sess); rec["_abs"] = jpg
         out.append(rec)
         log(f"  {i}/{len(merged)} {s_['kind']} at {int(s_['t_s'])//60}:{int(s_['t_s'])%60:02d} → "
             f"{str(r.get('element_at_marker') or r.get('reading_target') or r.get('screen_name'))[:60]}")
 
     unload(model)
+    try:
+        contact_sheet(out, os.path.join(shots_dir, "contact-sheet.jpg"))
+        log("contact sheet → analysis/screens/contact-sheet.jpg (what the model saw, with its answer)")
+    except Exception as e:  # noqa: BLE001
+        log(f"contact sheet skipped: {str(e)[:80]}")
+    for r in out:
+        r.pop("_abs", None)
     json.dump(dict(available=True, model=model, surface=kind, frames=len(out), reads=out),
               open(os.path.join(A, "screens.json"), "w"), ensure_ascii=False, indent=1)
     log(f"screen reading done in {time.time()-t0:.0f}s → analysis/screens.json ({len(out)} frames)")

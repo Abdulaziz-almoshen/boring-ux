@@ -204,7 +204,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("session")
     ap.add_argument("--model", default=None)
-    ap.add_argument("--max-frames", type=int, default=24)
+    ap.add_argument("--max-frames", type=int, default=0, help="0 = scale with the recording length")
     a = ap.parse_args()
 
     sess = os.path.abspath(os.path.expanduser(a.session))
@@ -281,8 +281,9 @@ def main():
             continue
         merged.append(s_)
     order = {"click": 0, "moment": 1, "context": 2}
-    if len(merged) > a.max_frames:
-        merged = sorted(sorted(merged, key=lambda s_: (order[s_["kind"]], s_["t_s"]))[:a.max_frames], key=lambda s_: s_["t_s"])
+    max_frames = a.max_frames or max(6, min(24, int(6 + dur / 45)))    # ~9 s per frame: keep the visual pass proportionate
+    if len(merged) > max_frames:
+        merged = sorted(sorted(merged, key=lambda s_: (order[s_["kind"]], s_["t_s"]))[:max_frames], key=lambda s_: s_["t_s"])
     log(f"{len(merged)} frames to read with {model} ({sum(1 for s_ in merged if s_['kind']=='click')} clicks, "
         f"{sum(1 for s_ in merged if s_['kind']=='moment')} moments)")
 

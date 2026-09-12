@@ -256,7 +256,11 @@ If evidence is thin (no speech, no clicks), say so plainly inside the relevant p
 # (data report with the judgment sections marked as not written). Claude is used ONLY when explicitly requested.
 OLLAMA = os.environ.get("BUX_OLLAMA_URL", "http://127.0.0.1:11434")
 # Preferred local writers, best first. BUX_LLM_MODEL pins one; otherwise the first one already pulled is used.
-PREFERRED = [m for m in [os.environ.get("BUX_LLM_MODEL")] if m] + ["gemma3:12b", "qwen3:14b", "qwen2.5:14b", "gemma3:27b", "qwen3:8b", "llama3.1:8b", "qwen2.5:7b"]
+# Bigger is not better when it swaps: on a 24 GB Mac qwen3:14b generates at ~8 tok/s under load while qwen3:8b does ~21.
+RAM_GB = round((os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")) / (1024 ** 3)) if hasattr(os, "sysconf") else 16
+BIG = ["gemma3:12b", "qwen3:14b", "qwen2.5:14b", "gemma3:27b", "qwen3:8b", "llama3.1:8b", "qwen2.5:7b"]
+SMALL = ["qwen3:8b", "gemma3:12b", "llama3.1:8b", "qwen2.5:7b", "qwen3:14b", "qwen2.5:14b"]
+PREFERRED = [os.environ.get("BUX_LLM_MODEL")] + (BIG if RAM_GB >= 32 else SMALL)
 OLLAMA_MODEL = PREFERRED[0]
 
 
@@ -307,7 +311,7 @@ def write_with_ollama(job, prompt, est, t0, out_dir=None, tag="", pbase=0.0, psp
     Progress is reported inside [pbase, pbase+pspan] of the fill stage. Returns (text, err)."""
     import urllib.request, math as _m
     body = json.dumps(dict(model=OLLAMA_MODEL, stream=False, format="json", keep_alive="3m", think=False,   # think=False: Qwen3 must not emit <think> preambles
-                           options=dict(num_ctx=num_ctx, temperature=0.2, num_predict=num_predict),
+                           options=dict(num_ctx=num_ctx, temperature=0.3, top_p=0.9, repeat_penalty=1.15, num_predict=num_predict),
                            messages=[dict(role="user", content=prompt)])).encode()
     req = urllib.request.Request(OLLAMA + "/api/chat", data=body, headers={"Content-Type": "application/json"}, method="POST")
     result = {}
@@ -340,15 +344,38 @@ def write_with_ollama(job, prompt, est, t0, out_dir=None, tag="", pbase=0.0, psp
     return result.get("out", ""), None
 
 
+def _repair_json(text):
+    """A local model that hits its token cap leaves the JSON unterminated. Close what is open and keep the keys that
+    completed — throwing the whole call away costs another full generation."""
+    t = (text or "").strip()
+    i = t.find("{")
+    if i < 0:
+        return None
+    t = t[i:]
+    # drop a trailing partial key/value, then close any open string, arrays and objects
+    t = re.sub(r',\s*"[^"]*"?\s*:?\s*("[^"]*)?$', "", t)
+    if t.count('"') % 2:
+        t += '"'
+    t += "]" * max(0, t.count("[") - t.count("]"))
+    t += "}" * max(0, t.count("{") - t.count("}"))
+    try:
+        return json.loads(t)
+    except json.JSONDecodeError:
+        return None
+
+
 def _parse_mapping(text):
     m = re.search(r"\{.*\}", text or "", re.S)
-    if not m:
-        return {}
-    try:
-        d = json.loads(m.group(0))
-        return d if isinstance(d, dict) else {}
-    except json.JSONDecodeError:
-        return {}
+    if m:
+        try:
+            d = json.loads(m.group(0))
+            if isinstance(d, dict):
+                return d
+        except json.JSONDecodeError:
+            pass
+    d = _repair_json(text)                 # a capped generation leaves the JSON open: keep the keys that completed
+    return d if isinstance(d, dict) else {}
+
 
 
 def evidence_pack(A, max_transcript=14000, timeline_s=None):
@@ -400,7 +427,7 @@ def evidence_pack(A, max_transcript=14000, timeline_s=None):
     timeline = "\n".join(lines)
     scr = rd("screens.json")
     seen = []
-    for r in (scr.get("reads") or [])[:26]:
+    for r in (scr.get("reads") or [])[:14]:
         t = int(r.get("t_s") or 0); stamp = f"{t//60}:{t%60:02d}"; k = r.get("read") or {}
         if r.get("kind") == "click":
             seen.append(f"[{stamp}] CLICK landed on: {k.get('element_at_marker','?')} ({k.get('element_translation','')}) — "
@@ -412,6 +439,7 @@ def evidence_pack(A, max_transcript=14000, timeline_s=None):
         else:
             seen.append(f"[{stamp}] SCREEN: {k.get('screen_name','?')} — {k.get('purpose','')} sections: "
                         f"{', '.join(str(x) for x in (k.get('main_sections') or [])[:5])}. {k.get('notable') or ''}")
+    seen = [ln[:220] for ln in seen]
     screen_block = ("\n\n=== what was on screen (read from the screen recording by a vision model) ===\n" + "\n".join(seen)) if seen else ""
     return f"=== computed data (JSON) ===\n{json.dumps(data, ensure_ascii=False)}\n\n=== transcript (verbatim, [m:ss] text) ===\n{tr}\n\n{screen_block}\n\n=== timeline, one line per 10 s (eyes=dominant 3x3 cell or state; on=seconds on-screen; sw=region switches; q=quality grade) ===\n{timeline}\n"
 
@@ -621,15 +649,17 @@ def stage_fill(job):
                                else "No click-latency evidence: the participant made no task clicks in this session.")
             groups = [g for g in groups if g[0] != "timing"]
             logj(job, "timing: no clicks in this session — filled deterministically, model pass skipped")
-        per = min(900, 120 + len(pack.encode("utf-8")) / 110)          # measured: a 22 KB chunk takes about 5 min on qwen3:14b (M-series GPU)
+        big = any(k in (st["model"] or "") for k in ("14b", "12b", "27b", "30b"))
+        tok_s, cap_avg = (8.5, 1600) if big else (20.0, 1600)      # measured on this class of machine
+        per = 20 + len(pack.encode("utf-8")) / 3.3 / 190 + cap_avg / tok_s   # prompt processing ≈190 tok/s + generation
         job["fill_est_s"] = int(per * len(groups)); save(job)
-        CAPS = dict(overview=3500, findings=3000, timing=2000)
+        CAPS = dict(overview=1800, findings=1800, timing=1200)
         for k, (gname, gnames, extra) in enumerate(groups):
             if gname.startswith("appendix"):      # translation only: no evidence pack needed (was 15k prompt tokens per pass)
                 prompt = (TRANSLATE_RULES + f"\nPLACEHOLDERS (return all {len(gnames)} keys): {json.dumps(gnames)}\n{extra}\n")
             else:
                 prompt = (FILL_RULES_LOCAL + f"\n\nWORDING TIER: {tier}{" — this session is click-validated: write firm columns/halves and do NOT use the words estimated or unvalidated anywhere" if tier == "regions" else ""}\nPLACEHOLDERS (return all {len(gnames)} keys): {json.dumps(gnames)}\n{extra}\n\n" + pack)
-            cap = CAPS.get(gname, 2000)
+            cap = CAPS.get(gname, 1200)
             open(os.path.join(A, f"fill-prompt-{gname}.txt"), "w", encoding="utf-8").write(prompt)
             got = {}
             for attempt in (1, 2):
@@ -638,7 +668,10 @@ def stage_fill(job):
                     return "interrupted"
                 if err:
                     raise RuntimeError(f"ollama failed: {err[-300:]}")
-                got = {kk: vv for kk, vv in _parse_mapping(res).items() if kk in gnames and vv}
+                parsed = _parse_mapping(res) or {}
+                got = {kk: vv for kk, vv in parsed.items() if kk in gnames and vv}
+                if got and len(got) < len(gnames):
+                    logj(job, f"{gname}: recovered {len(got)}/{len(gnames)} keys from a truncated answer")
                 if got and gname == "overview" and attempt == 1:
                     rows = re.findall(r"<tr>(.*?)</tr>", got.get("GRADE_TABLE", ""), re.S)
                     bad = [r for r in rows if not re.search(r"\[\d+:\d\d\]", r) and "no evidence" not in r.lower()]

@@ -364,17 +364,33 @@ def _repair_json(text):
         return None
 
 
+def _as_html(v):
+    """Local models sometimes answer a table placeholder with a JSON array (or an object) instead of an HTML string.
+    Everything downstream treats placeholder values as text, so flatten here rather than crashing on the first regex."""
+    if isinstance(v, str):
+        return v
+    if isinstance(v, list):
+        return "\n".join(_as_html(x) for x in v)
+    if isinstance(v, dict):
+        if any(k in v for k in ("cells", "row", "columns")):
+            cells = v.get("cells") or v.get("row") or v.get("columns")
+            return "<tr>" + "".join(f"<td>{_as_html(c)}</td>" for c in (cells if isinstance(cells, list) else [cells])) + "</tr>"
+        return " · ".join(f"{k}: {_as_html(x)}" for k, x in v.items())
+    return "" if v is None else str(v)
+
+
 def _parse_mapping(text):
     m = re.search(r"\{.*\}", text or "", re.S)
     if m:
         try:
             d = json.loads(m.group(0))
             if isinstance(d, dict):
-                return d
+                return {k: _as_html(v) for k, v in d.items()}
         except json.JSONDecodeError:
             pass
     d = _repair_json(text)                 # a capped generation leaves the JSON open: keep the keys that completed
-    return d if isinstance(d, dict) else {}
+    d = d if isinstance(d, dict) else {}
+    return {k: _as_html(v) for k, v in d.items()}
 
 
 

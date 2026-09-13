@@ -460,6 +460,14 @@ def evidence_pack(A, max_transcript=14000, timeline_s=None):
     return f"=== computed data (JSON) ===\n{json.dumps(data, ensure_ascii=False)}\n\n=== transcript (verbatim, [m:ss] text) ===\n{tr}\n\n{screen_block}\n\n=== timeline, one line per 10 s (eyes=dominant 3x3 cell or state; on=seconds on-screen; sw=region switches; q=quality grade) ===\n{timeline}\n"
 
 
+SIGNAL_RULES = """You are filling three short cells per row of a usability scorecard. Each row is one phase of the session, listed below.
+Return ONE JSON object with EXACTLY the keys asked for and nothing else. Values are PLAIN TEXT, never HTML, never a finding block:
+  SIGNAL_i  = exactly one word: Delight, Friction, Confusion or Request.
+  FRICTION_i = an integer 0-100 as a string. Delight must be <=30; Confusion and Friction must be >=40.
+  RECOMMENDATION_i = ONE sentence, at most 20 words, naming the interface element from the evidence. No quotes, no markup.
+Base every row on the phase's own numbers and on what the participant said or clicked during it."""
+
+
 TRANSLATE_RULES = """Translate each numbered transcript line into natural English. Return ONE JSON object whose keys are EXACTLY the placeholder
 names listed below (APPENDIX_ENGLISH_<n> for line n) and whose values are the plain-text English translation of that line (no HTML, no notes).
 Keep it literal; keep UI words (button names, field labels) as said. Output JSON only."""
@@ -510,8 +518,8 @@ def plan_groups(names, appendix):
     ti = g(lambda n: n in ("PLACEMENT_TABLE", "PER_NEED_MAP") or re.match(r"^(LATENCY_MEANING|INTENT_READS_AS)_\d+$", n))
     if ov: groups.append(("overview", ov, ""))
     # one row per moment (signal, friction score, recommendation) — batched so a single answer never has to hold 60 keys
-    for i in range(0, len(sig), 24):
-        groups.append((f"signals{i//24+1}", sig[i:i + 24], ""))
+    for i in range(0, len(sig), 15):                       # 5 phases per call: short answers, no room to drift into HTML
+        groups.append((f"signals{i//15+1}", sig[i:i + 15], ""))
     if fi: groups.append(("findings", fi, FINDINGS_GUIDE))
     if ti: groups.append(("timing", ti, ""))
     ap = g(lambda n: n.startswith("APPENDIX_ENGLISH_"))
@@ -658,6 +666,10 @@ def stage_fill(job):
         except Exception:  # noqa: BLE001
             appendix = []
         pack = evidence_pack(A)
+        try:
+            phases = json.load(open(os.path.join(A, "report-data.json"), encoding="utf-8")).get("phases") or []
+        except Exception:  # noqa: BLE001
+            phases = []
         groups = plan_groups(names, appendix)
         try:
             n_clicks = int(((json.load(open(os.path.join(A, "report-data.json"), encoding="utf-8")).get("stats") or {}).get("clicks") or 0))
@@ -673,10 +685,17 @@ def stage_fill(job):
         tok_s, cap_avg = (8.5, 1600) if big else (20.0, 1600)      # measured on this class of machine
         per = 20 + len(pack.encode("utf-8")) / 3.3 / 190 + cap_avg / tok_s   # prompt processing ≈190 tok/s + generation
         job["fill_est_s"] = int(per * len(groups)); save(job)
-        CAPS = dict(overview=1400, findings=1800, timing=1200)
+        CAPS = dict(overview=2600, findings=2200, timing=1400)   # the grade table carries evidence quotes: it is legitimately long
         for k, (gname, gnames, extra) in enumerate(groups):
             if gname.startswith("appendix"):      # translation only: no evidence pack needed (was 15k prompt tokens per pass)
                 prompt = (TRANSLATE_RULES + f"\nPLACEHOLDERS (return all {len(gnames)} keys): {json.dumps(gnames)}\n{extra}\n")
+            elif gname.startswith("signals"):     # three short cells per phase: a full rules block made the model write HTML here
+                idx = sorted({int(n.split("_")[-1]) for n in gnames})
+                rows = "\n".join(f"row {k}: {p.get('name','?')} | {p.get('time','')} | on-screen {p.get('on',0):.0f}% | "
+                                  f"{p.get('clicks',0)} clicks | gaze L/C/R {p.get('l',0):.0f}/{p.get('c',0):.0f}/{p.get('r',0):.0f}"
+                                  for k, p in ((k, phases[k - 1]) for k in idx if k - 1 < len(phases)))
+                prompt = (SIGNAL_RULES + f"\n\n=== the rows you are filling ===\n{rows}\n\nPLACEHOLDERS (return all {len(gnames)} keys): "
+                          f"{json.dumps(gnames)}\n\n" + pack)
             else:
                 prompt = (FILL_RULES_LOCAL + f"\n\nWORDING TIER: {tier}{" — this session is click-validated: write firm columns/halves and do NOT use the words estimated or unvalidated anywhere" if tier == "regions" else ""}\nPLACEHOLDERS (return all {len(gnames)} keys): {json.dumps(gnames)}\n{extra}\n\n" + pack)
             cap = CAPS.get(gname) or min(2000, 250 + 45 * len(gnames))    # room for the keys asked for, not room to ramble

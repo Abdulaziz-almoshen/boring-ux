@@ -518,8 +518,13 @@ def plan_groups(names, appendix):
     ti = g(lambda n: n in ("PLACEMENT_TABLE", "PER_NEED_MAP") or re.match(r"^(LATENCY_MEANING|INTENT_READS_AS)_\d+$", n))
     if ov: groups.append(("overview", ov, ""))
     # one row per moment (signal, friction score, recommendation) — batched so a single answer never has to hold 60 keys
-    for i in range(0, len(sig), 15):                       # 5 phases per call: short answers, no room to drift into HTML
-        groups.append((f"signals{i//15+1}", sig[i:i + 15], ""))
+    # Batch BY ROW, not by sorted key name: `names` is sorted lexicographically (FRICTION_1, FRICTION_10, FRICTION_11 …),
+    # so slicing it asked for one set of keys while the prompt described a different set of rows.
+    rows_ = sorted({int(n.split("_")[-1]) for n in sig})
+    for i in range(0, len(rows_), 5):                      # 5 scorecard rows per call
+        chunk = [n for r in rows_[i:i + 5] for n in (f"SIGNAL_{r}", f"FRICTION_{r}", f"RECOMMENDATION_{r}") if n in sig]
+        if chunk:
+            groups.append((f"signals{i//5+1}", chunk, ""))
     if fi: groups.append(("findings", fi, FINDINGS_GUIDE))
     if ti: groups.append(("timing", ti, ""))
     ap = g(lambda n: n.startswith("APPENDIX_ENGLISH_"))
@@ -700,15 +705,20 @@ def stage_fill(job):
                 prompt = (FILL_RULES_LOCAL + f"\n\nWORDING TIER: {tier}{" — this session is click-validated: write firm columns/halves and do NOT use the words estimated or unvalidated anywhere" if tier == "regions" else ""}\nPLACEHOLDERS (return all {len(gnames)} keys): {json.dumps(gnames)}\n{extra}\n\n" + pack)
             cap = CAPS.get(gname) or min(2000, 250 + 45 * len(gnames))    # room for the keys asked for, not room to ramble
             open(os.path.join(A, f"fill-prompt-{gname}.txt"), "w", encoding="utf-8").write(prompt)
-            got = {}
+            got, ask_for = {}, list(gnames)
             for attempt in (1, 2):
+                if attempt == 2 and got:                   # ask only for what is still missing, not the whole group again
+                    ask_for = [n for n in gnames if n not in got]
+                    prompt = re.sub(r"PLACEHOLDERS \(return all \d+ keys\): \[.*?\]",
+                                    f"PLACEHOLDERS (return all {len(ask_for)} keys): {json.dumps(ask_for)}", prompt, flags=re.S)
+                    logj(job, f"{gname}: asking again for the {len(ask_for)} missing key(s)")
                 res, err = write_with_ollama(job, prompt, per, now(), A, f"{gname}-{attempt}", pbase=k / len(groups), pspan=1 / len(groups), num_predict=cap)
                 if err == "interrupted":
                     return "interrupted"
                 if err:
                     raise RuntimeError(f"ollama failed: {err[-300:]}")
                 parsed = _parse_mapping(res) or {}
-                got = {kk: vv for kk, vv in parsed.items() if kk in gnames and vv}
+                got.update({kk: vv for kk, vv in parsed.items() if kk in gnames and vv})
                 if got and len(got) < len(gnames):
                     logj(job, f"{gname}: recovered {len(got)}/{len(gnames)} keys from a truncated answer")
                 if got and gname == "overview" and attempt == 1:
@@ -719,7 +729,7 @@ def stage_fill(job):
                         prompt = prompt + ("\n\nCORRECTION: your previous GRADE_TABLE had rows without evidence. Rewrite ALL placeholders; every grade row "
                                            "must cite a verbatim quote with [m:ss] or say 'no evidence' (and then the score must be 'no evidence').")
                         continue
-                if got:
+                if len(got) >= len(gnames):
                     break
             mapping.update(got)
             missing = [n for n in gnames if n not in mapping]

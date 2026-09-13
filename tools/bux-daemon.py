@@ -20,6 +20,7 @@ import glob
 import json
 import os
 import re
+import socket
 import shutil
 import subprocess
 import sys
@@ -317,7 +318,9 @@ def write_with_ollama(job, prompt, est, t0, out_dir=None, tag="", pbase=0.0, psp
     result = {}
     def run():
         try:
-            with urllib.request.urlopen(req, timeout=3600) as r:
+            # generous but bounded: prompt processing (~190 tok/s) + generation (~8 tok/s worst case) + slack.
+            call_timeout = min(900, 90 + len(prompt.encode("utf-8")) / 3.3 / 150 + num_predict / 7)
+            with urllib.request.urlopen(req, timeout=call_timeout) as r:
                 d = json.loads(r.read()); txt = d.get("message", {}).get("content", "")
                 result["out"] = re.sub(r"<think>.*?</think>", "", txt, flags=re.S).strip()
                 result["meta"] = dict(prompt_tokens=d.get("prompt_eval_count"), out_tokens=d.get("eval_count"), done=d.get("done_reason"),

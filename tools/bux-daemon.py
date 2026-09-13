@@ -488,10 +488,14 @@ def plan_groups(names, appendix):
     """Split placeholders into focused calls a 14B model can answer well inside its context window."""
     g = lambda pred: [n for n in names if pred(n)]
     groups = []
-    ov = g(lambda n: n in ("GRADE_TABLE", "JOURNEY_SUMMARY", "PRODUCT_INSIGHTS", "ROADMAP_ROWS", "INSTRUMENT_NEXT") or re.match(r"^(SIGNAL|FRICTION|RECOMMENDATION)_\d+$", n))
+    ov = g(lambda n: n in ("GRADE_TABLE", "JOURNEY_SUMMARY", "PRODUCT_INSIGHTS", "ROADMAP_ROWS", "INSTRUMENT_NEXT"))
+    sig = g(lambda n: re.match(r"^(SIGNAL|FRICTION|RECOMMENDATION)_\d+$", n))
     fi = g(lambda n: n in ("FINDINGS_P0", "FINDINGS_P1", "DELIGHTERS", "FINDINGS_P2", "ACTION_LIST_ROWS"))
     ti = g(lambda n: n in ("PLACEMENT_TABLE", "PER_NEED_MAP") or re.match(r"^(LATENCY_MEANING|INTENT_READS_AS)_\d+$", n))
     if ov: groups.append(("overview", ov, ""))
+    # one row per moment (signal, friction score, recommendation) — batched so a single answer never has to hold 60 keys
+    for i in range(0, len(sig), 24):
+        groups.append((f"signals{i//24+1}", sig[i:i + 24], ""))
     if fi: groups.append(("findings", fi, FINDINGS_GUIDE))
     if ti: groups.append(("timing", ti, ""))
     ap = g(lambda n: n.startswith("APPENDIX_ENGLISH_"))
@@ -653,13 +657,13 @@ def stage_fill(job):
         tok_s, cap_avg = (8.5, 1600) if big else (20.0, 1600)      # measured on this class of machine
         per = 20 + len(pack.encode("utf-8")) / 3.3 / 190 + cap_avg / tok_s   # prompt processing ≈190 tok/s + generation
         job["fill_est_s"] = int(per * len(groups)); save(job)
-        CAPS = dict(overview=1800, findings=1800, timing=1200)
+        CAPS = dict(overview=1400, findings=1800, timing=1200)
         for k, (gname, gnames, extra) in enumerate(groups):
             if gname.startswith("appendix"):      # translation only: no evidence pack needed (was 15k prompt tokens per pass)
                 prompt = (TRANSLATE_RULES + f"\nPLACEHOLDERS (return all {len(gnames)} keys): {json.dumps(gnames)}\n{extra}\n")
             else:
                 prompt = (FILL_RULES_LOCAL + f"\n\nWORDING TIER: {tier}{" — this session is click-validated: write firm columns/halves and do NOT use the words estimated or unvalidated anywhere" if tier == "regions" else ""}\nPLACEHOLDERS (return all {len(gnames)} keys): {json.dumps(gnames)}\n{extra}\n\n" + pack)
-            cap = CAPS.get(gname, 1200)
+            cap = CAPS.get(gname) or min(2000, 250 + 45 * len(gnames))    # room for the keys asked for, not room to ramble
             open(os.path.join(A, f"fill-prompt-{gname}.txt"), "w", encoding="utf-8").write(prompt)
             got = {}
             for attempt in (1, 2):
